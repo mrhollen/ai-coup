@@ -32,3 +32,6 @@ go.work.sum
 # .idea/
 # .vscode/
 
+
+# transient tooling probe
+.write_probe

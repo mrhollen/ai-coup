@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COUP — table mockup</title>
+<!--
+  docs/mockup.html — static visual mockup for the ai-coup web client.
+  Companion to docs/ui-spec.md (normative). No external assets, no build step, no JS framework.
+  The tiny inline script at the bottom only demonstrates the response-modal "locked" state;
+  nothing here talks to a server. If pixels change, update ui-spec.md §3 tokens first.
+-->
+<style>
+:root{
+  --bg:#14100e; --bg-panel:#1d1712; --bg-elev:#251d16; --bg-inset:#0f0c0a;
+  --ink:#ede3d0; --ink-dim:#9c8f7a; --ink-faint:#6e6355;
+  --gold:#c9a227; --gold-bright:#e8c15a; --gold-ink:#1a130c;
+  --red:#b3402f; --red-bright:#d8694f;
+  --green:#4d7c53; --green-bright:#7fae88;
+  --llm-bg:#223041; --llm-ink:#a8c3dd; --llm-line:#35495f;
+  --line:#3a2f24; --line-strong:#55452f;
+  --card-face:#f3ead6; --card-face-line:#d8c9a8; --card-back:#6e2020; --card-back-hi:#873030;
+  --char-duke:#c9a227; --char-assassin:#b3402f; --char-contessa:#4d7c53;
+  --char-captain:#3f6ea5; --char-ambassador:#7b5ea7;
+  --font-display:Palatino Linotype,Palatino,"Book Antiqua",Georgia,serif;
+  --font-ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --r-card:8px; --r-panel:12px; --r-modal:14px;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4);
+  --shadow-modal:0 24px 64px rgba(0,0,0,.55),0 0 0 1px var(--line-strong);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-ui); font-size:16px;
+  background-image:radial-gradient(120% 90% at 50% 0%, #1a1410 0%, var(--bg) 60%);
+  overflow:hidden;
+}
+:focus-visible{outline:2px solid var(--gold-bright); outline-offset:2px; border-radius:2px}
+
+/* ---------- topbar ---------- */
+.topbar{height:56px; display:flex; align-items:center; gap:14px; padding:0 20px;
+  background:var(--bg-panel); border-bottom:1px solid var(--line)}
+.brand{font-family:var(--font-display); font-variant:small-caps; font-size:20px;
+  letter-spacing:.14em; color:var(--gold-bright)}
+.hairline{width:1px; height:24px; background:var(--line-strong); margin:0 6px}
+.gid{font-family:var(--font-mono); font-size:11.5px; color:var(--ink-dim);
+  background:var(--bg-inset); border:1px solid var(--line); border-radius:999px; padding:3px 10px}
+.spacer{flex:1}
+.conn{display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--ink-dim)}
+.dot{width:8px; height:8px; border-radius:50%; background:var(--green);
+  box-shadow:0 0 0 0 rgba(77,124,83,.5); animation:breathe 2.2s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(77,124,83,.45)}50%{box-shadow:0 0 0 6px rgba(77,124,83,0)}}
+.btn{font-family:var(--font-ui); font-size:14px; font-weight:600; letter-spacing:.02em;
+  height:38px; padding:0 16px; border-radius:8px; border:1px solid transparent;
+  cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:8px}
+.btn-ghost{background:none; color:var(--ink-dim); border:none; height:32px}
+.btn-ghost:hover{color:var(--ink)}
+.viewer{font-family:var(--font-display); font-variant:small-caps; font-size:14.5px; letter-spacing:.08em;
+  padding-bottom:3px; border-bottom:2px solid var(--gold)}
+
+/* ---------- layout ---------- */
+.main{height:calc(100% - 56px); display:grid; grid-template-columns:minmax(0,1fr) 400px;
+  gap:16px; padding:16px; min-height:0}
+.left{display:flex; flex-direction:column; min-width:0; min-height:0}
+
+/* ---------- felt & center ---------- */
+.felt{position:relative; width:min(100%, calc(100vh - 320px)); min-width:340px; aspect-ratio:1/1;
+  margin-inline:auto; border-radius:var(--r-panel); border:1px solid var(--line-strong);
+  background:radial-gradient(closest-side, #2b2118, #1c1510 78%),
+    repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,255,255,.03) 3px 4px);
+  box-shadow:inset 0 2px 18px rgba(0,0,0,.55), var(--shadow-1)}
+.center{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:168px; height:168px; border-radius:50%; background:var(--bg-inset);
+  border:1px solid var(--line-strong);
+  box-shadow:0 0 0 6px rgba(20,16,14,.9), 0 0 0 7px rgba(201,162,39,.45), inset 0 2px 24px rgba(0,0,0,.6);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; text-align:center}
+.center .c-main{font-family:var(--font-display); font-variant:small-caps; font-size:15px;
+  letter-spacing:.2em; color:var(--gold-bright)}
+.center .c-sub{font-size:11px; color:var(--ink-dim); max-width:140px}
+.center .c-deck{font-family:var(--font-mono); font-size:11px; color:var(--ink-dim)}
+
+/* ---------- seats (pentagon ring, clamped) ---------- */
+.seats{position:absolute; inset:0}
+.seat{position:absolute; transform:translate(-50%,-50%); width:168px;
+  left:clamp(92px, var(--sx), calc(100% - 92px)); top:clamp(78px, var(--sy), calc(100% - 78px));
+  background:var(--bg-elev); border:1px solid var(--line-strong); border-radius:var(--r-panel);
+  box-shadow:var(--shadow-1); padding:10px 12px}
+.seat[data-slot="0"]{--sx:50%;   --sy:9%}
+.seat[data-slot="1"]{--sx:89%;   --sy:37.5%}
+.seat[data-slot="2"]{--sx:74%;   --sy:83%}
+.seat[data-slot="3"]{--sx:26%;   --sy:83%}
+.seat[data-slot="4"]{--sx:11%;   --sy:37.5%}
+.s-row{display:flex; align-items:center; justify-content:space-between; gap:6px}
+.s-name{font-family:var(--font-display); font-variant:small-caps; font-size:15px; letter-spacing:.04em}
+.you-tag{font-size:10px; font-weight:700; letter-spacing:.12em; color:var(--gold-bright)}
+.out-tag{font-size:10px; font-weight:700; letter-spacing:.14em; color:var(--ink-dim)}
+.llm-badge{display:inline-block; font-size:10px; font-weight:700; letter-spacing:.08em; line-height:1;
+  color:var(--llm-ink); background:var(--llm-bg); border:1px solid var(--llm-line);
+  border-radius:999px; padding:2px 6px; margin-left:6px; vertical-align:1px}
+.s-coins{display:flex; align-items:center; gap:7px; margin-top:6px}
+.coin{width:12px; height:12px; border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #f0d489, #c9a227 55%, #8a6d1a);
+  border:1px solid #5e4a12}
+.s-coins b{font-family:var(--font-mono); font-weight:500; font-size:14px; color:var(--gold-bright)}
+.s-cards{display:flex; align-items:center; gap:6px; margin-top:8px; min-height:52px}
+.back{width:34px; height:48px; border-radius:6px; background:
+  repeating-linear-gradient(45deg, rgba(255,255,255,.05) 0 2px, transparent 2px 7px),
+  repeating-linear-gradient(-45deg, rgba(255,255,255,.05) 0 2px, transparent 2px 7px), var(--card-back);
+  box-shadow:inset 0 0 0 3px var(--card-back-hi), inset 0 0 0 4px rgba(0,0,0,.35)}
+.chip{position:relative; width:34px; height:48px; border-radius:6px; background:var(--card-face);
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--font-display); font-size:17px; color:#241c14}
+.chip::after{content:""; position:absolute; left:0; right:0; bottom:0; height:3px;
+  border-radius:0 0 6px 6px; background:var(--stripe)}
+.seat.acting{box-shadow:0 0 0 2px var(--gold), 0 0 18px rgba(201,162,39,.35), var(--shadow-1)}
+.seat.decision::after{content:""; position:absolute; inset:-5px; pointer-events:none;
+  border:1px dashed var(--gold-bright); border-radius:calc(var(--r-panel) + 4px);
+  animation:pulse 2.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:.95}}
+.seat.eliminated{opacity:.55; filter:saturate(.6)}
+
+/* ---------- hand ---------- */
+.hand-row{padding:14px 8px 2px; text-align:center}
+.hand-cap{font-size:10px; letter-spacing:.2em; color:var(--ink-dim); display:block; margin-bottom:10px}
+.hcards{display:flex; justify-content:center; gap:12px}
+.hcard{position:relative; width:96px; aspect-ratio:5/7; border-radius:var(--r-card);
+  background:var(--card-face); box-shadow:0 8px 20px rgba(0,0,0,.45)}
+.hcard .inner{position:absolute; inset:5px; border-radius:5px; display:flex; align-items:center;
+  justify-content:center; box-shadow:inset 0 0 0 1px var(--card-face-line)}
+.hcard .stripe{position:absolute; top:0; left:0; right:0; height:6px; border-radius:5px 5px 0 0}
+.hcard .cname{font-family:var(--font-display); font-variant:small-caps; font-size:14px;
+  color:#241c14; letter-spacing:.03em}
+.hcard .pos{position:absolute; top:9px; right:8px; font-family:var(--font-mono);
+  font-size:11px; color:rgba(36,28,20,.4)}
+
+/* ---------- log ---------- */
+.log{background:var(--bg-panel); border:1px solid var(--line); border-radius:var(--r-panel);
+  padding:14px 0; overflow:hidden}
+.log-head{display:flex; align-items:center; justify-content:space-between; padding:0 16px; margin-bottom:10px}
+.kicker{font-size:10.5px; letter-spacing:.18em; color:var(--ink-dim); font-weight:600}
+.follow{font-size:10.5px; color:var(--ink-faint)}
+.row{display:grid; grid-template-columns:44px 20px 1fr; gap:8px; padding:5px 12px; align-items:baseline}
+.row:nth-child(even){background:rgba(15,12,10,.4)}
+.row .t{font-family:var(--font-mono); font-size:11px; color:var(--ink-faint)}
+.row .ic{font-size:13px; text-align:center}
+.row .tx{font-size:13px; line-height:1.45}
+.row.dim .tx{color:var(--ink-dim)}
+.row.gold .tx{color:var(--gold-bright)}
+.row.red .tx{color:var(--red-bright)}
+.ic.coins{color:var(--gold)}
+.divider{display:flex; align-items:center; gap:12px; padding:9px 16px}
+.divider::before,.divider::after{content:""; flex:1; height:1px; background:var(--line)}
+.divider span{font-family:var(--font-display); font-variant:small-caps; font-size:10.5px;
+  letter-spacing:.2em; color:var(--ink-dim); white-space:nowrap}
+.trim{text-align:center; font-family:var(--font-display); font-style:italic;
+  font-size:11.5px; color:var(--ink-faint); padding:8px 0}
+
+/* ---------- modal ---------- */
+.modal-root{position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center}
+.backdrop{position:absolute; inset:0; background:rgba(10,8,6,.72); backdrop-filter:blur(2px)}
+.modal{position:relative; width:min(480px, calc(100vw - 32px)); background:var(--bg-elev);
+  border:1px solid var(--line-strong); border-radius:var(--r-modal); box-shadow:var(--shadow-modal)}
+.m-head{padding:20px 24px 0}
+.m-kicker{font-size:10.5px; letter-spacing:.18em; color:var(--gold); font-weight:600; margin-bottom:9px}
+.m-close{position:absolute; top:12px; right:14px; background:none; border:none; color:var(--ink-dim);
+  font-size:18px; line-height:1; cursor:pointer; padding:4px}
+.m-close:hover{color:var(--ink)}
+.m-title{font-family:var(--font-display); font-size:16.5px; line-height:1.5; color:var(--ink)}
+.m-sub{font-size:12.5px; color:var(--ink-dim); margin-top:5px}
+.m-body{padding:16px 24px 8px}
+.chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px}
+.pchip{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line-strong);
+  background:var(--bg-panel); border-radius:999px; padding:5px 12px; font-size:12.5px}
+.pchip .pstate{font-size:12px; color:var(--ink-faint)}
+.pchip.passed .pstate{color:var(--ink-dim)}
+.pchip.mine{border-color:rgba(232,193,90,.65)}
+.pchip.mine .pstate{color:var(--gold-bright)}
+.pending-dot{animation:pulse 1.8s ease-in-out infinite}
+.m-set{display:flex; align-items:center; justify-content:space-between; gap:12px;
+  border-top:1px solid var(--line); margin:0 -24px; padding:10px 24px 0; font-size:11.5px; color:var(--ink-dim)}
+.m-set .cd{font-family:var(--font-mono)}
+.m-foot{padding:16px 24px 20px; display:flex; gap:8px}
+.m-foot .btn{flex:1 1 0; min-height:44px; height:auto; padding:8px 6px; font-size:13.5px;
+  line-height:1.25; text-align:center}
+.btn-primary{background:var(--gold); color:var(--gold-ink)}
+.btn-primary:hover{background:var(--gold-bright)}
+.btn-danger{background:transparent; border-color:rgba(179,64,47,.55); color:var(--red-bright)}
+.btn-danger:hover{background:rgba(179,64,47,.15)}
+.btn-outline{background:transparent; border-color:var(--line-strong); color:var(--ink)}
+.btn-outline:hover{border-color:var(--gold); color:var(--gold-bright)}
+.m-status{padding:20px 24px; font-family:var(--font-display); font-variant:small-caps;
+  letter-spacing:.1em; font-size:13.5px; color:var(--gold-bright); text-align:center}
+
+.note{position:fixed; right:10px; bottom:8px; z-index:60; font-size:10px; color:var(--ink-faint)}
+
+/* ---------- responsive (mirrors ui-spec §14) ---------- */
+@media (max-width:1080px){
+  .main{grid-template-columns:1fr; grid-auto-rows:minmax(0,auto); overflow-y:auto}
+  .log{order:2; min-height:260px}
+}
+@media (max-width:720px){
+  body{overflow:auto}
+  .felt{aspect-ratio:auto; min-height:340px; width:100%}
+  .seats{position:static; display:flex; flex-wrap:wrap; justify-content:center; gap:12px; padding-top:16px}
+  .seat{position:static; transform:none; width:150px}
+  .center{position:static; margin:22px auto 18px; width:128px; height:128px}
+  .hcard{width:84px}
+  .m-foot{flex-direction:column}
+  .gid{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important; transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">Coup</span><span class="hairline"></span>
+  <span class="gid" title="g_0a1b2c3d4e5f6789">g_0a1b2c…</span>
+  <span class="spacer"></span>
+  <span class="conn"><i class="dot"></i>live</span>
+  <button type="button" class="btn btn-ghost" title="The other human seats will be asked to vote">Forfeit vote</button>
+  <span class="viewer">Marta</span>
+</header>
+
+<main class="main">
+  <section class="left">
+    <div class="felt">
+      <div class="seats">
+
+        <!-- slot 0 · top -->
+        <div class="seat" data-slot="0">
+          <div class="s-row"><span class="s-name">Sonny</span></div>
+          <div class="s-coins"><span class="coin"></span><b>9</b></div>
+          <div class="s-cards"><span class="back" title="face-down"></span><span class="back" title="face-down"></span></div>
+        </div>
+
+        <!-- slot 1 · upper right -->
+        <div class="seat" data-slot="1">
+          <div class="s-row"><span class="s-name">Carmine<span class="llm-badge">AI</span></span></div>
+          <div class="s-coins"><span class="coin"></span><b>4</b></div>
+          <div class="s-cards"><span class="back" title="face-down"></span><span class="back" title="face-down"></span></div>
+        </div>
+
+        <!-- slot 2 · lower right — you, target of the window -->
+        <div class="seat decision" data-slot="2">
+          <div class="s-row"><span class="s-name">Marta</span><span class="you-tag">YOU</span></div>
+          <div class="s-coins"><span class="coin"></span><b>6</b></div>
+          <div class="s-cards"><span class="back" title="face-down"></span><span class="back" title="face-down"></span></div>
+        </div>
+
+        <!-- slot 3 · lower left — eliminated -->
+        <div class="seat eliminated" data-slot="3">
+          <div class="s-row"><span class="s-name">Bruno</span><span class="out-tag">OUT</span></div>
+          <div class="s-coins" title="coins are inert — this seat is out"><span class="coin"></span><b>2</b></div>
+          <div class="s-cards">
+            <span class="chip" style="--stripe:var(--char-captain)" title="Bruno's face-up card: Captain" aria-label="Bruno's face-up card: Captain">C</span>
+            <span class="chip" style="--stripe:var(--char-contessa)" title="Bruno's face-up card: Contessa" aria-label="Bruno's face-up card: Contessa">C</span>
+          </div>
+        </div>
+
+        <!-- slot 4 · upper left — acting LLM -->
+        <div class="seat acting" data-slot="4">
+          <div class="s-row"><span class="s-name">Vito<span class="llm-badge">AI</span></span></div>
+          <div class="s-coins"><span class="coin"></span><b>0</b></div>
+          <div class="s-cards">
+            <span class="chip" style="--stripe:var(--char-captain)" title="Vito's face-up card: Captain" aria-label="Vito's face-up card: Captain">C</span>
+            <span class="back" title="face-down"></span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="center">
+        <span class="c-main">Window open</span>
+        <span class="c-sub">an assassination hangs in the air</span>
+        <span class="c-deck">court deck · 5 cards</span>
+      </div>
+    </div>
+
+    <div class="hand-row">
+      <span class="hand-cap">YOUR&nbsp;HAND</span>
+      <div class="hcards">
+        <div class="hcard" title="Your card 1 (face_down_0)">
+          <div class="inner"><span class="stripe" style="background:var(--char-ambassador)"></span><span class="cname">Ambassador</span></div>
+          <span class="pos">1</span>
+        </div>
+        <div class="hcard" title="Your card 2 (face_down_1)">
+          <div class="inner"><span class="stripe" style="background:var(--char-captain)"></span><span class="cname">Captain</span></div>
+          <span class="pos">2</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="log" role="log" aria-label="Table log">
+    <h2 class="log-head"><span class="kicker">TABLE&nbsp;LOG</span><span class="follow">following</span></h2>
+
+    <div class="trim">… earlier entries trimmed …</div>
+
+    <div class="divider"><span>Turn 5 — Marta</span></div>
+    <div class="row"><span class="t">19:02</span><span class="ic">◆</span><span class="tx">Marta takes Income.</span></div>
+    <div class="row"><span class="t">19:02</span><span class="ic coins">→</span><span class="tx">Marta +1 (income) — now 6</span></div>
+
+    <div class="divider"><span>Turn 6 — Vito</span></div>
+    <div class="row"><span class="t">19:05</span><span class="ic">◆</span><span class="tx">Vito claims Assassin and declares an Assassinate against Marta (paid 3)</span></div>
+    <div class="row"><span class="t">19:05</span><span class="ic coins">→</span><span class="tx">Vito pays 3 — sunk — for an assassination, now 0</span></div>
+    <div class="row dim"><span class="t">19:05</span><span class="ic"></span><span class="tx">Responses open — Sonny, Carmine, Marta may act.</span></div>
+    <div class="row dim"><span class="t">19:06</span><span class="ic"></span><span class="tx">Carmine passed</span></div>
+  </aside>
+</main>
+
+<div class="modal-root" id="modalRoot">
+  <div class="backdrop"></div>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="wmTitle">
+    <div class="m-head">
+      <span class="m-kicker">THE&nbsp;WINDOW</span>
+      <button type="button" class="m-close" aria-label="Hold — close without responding">×</button>
+      <h1 class="m-title" id="wmTitle">Vito<span class="llm-badge">AI</span> claims Assassin and declares an Assassinate against Marta (paid&nbsp;3)</h1>
+      <p class="m-sub">You are the target.</p>
+    </div>
+    <div class="m-body">
+      <div class="chips">
+        <span class="pchip"><span>Sonny</span><span class="pstate pending-dot" aria-label="has not responded yet">…</span></span>
+        <span class="pchip passed"><span>Carmine<span class="llm-badge">AI</span></span><span class="pstate">passed</span></span>
+        <span class="pchip mine" id="myChip"><span>Marta</span><span class="pstate" id="myState">deciding…</span></span>
+      </div>
+    </div>
+    <div class="m-set"><span>waits for every seat to answer · 1 of 3 answered</span><span class="cd">closes in 0:45</span></div>
+    <div class="m-foot" id="mFoot">
+      <button type="button" class="btn btn-primary" data-resp="block" data-label="BLOCK — CONTESSA" data-word="blocks as Contessa">Block — I'm Contessa</button>
+      <button type="button" class="btn btn-danger"  data-resp="challenge" data-label="CHALLENGE" data-word="challenged!">Challenge</button>
+      <button type="button" class="btn btn-outline" data-resp="pass" data-label="PASS" data-word="passed">Pass</button>
+    </div>
+  </section>
+</div>
+
+<p class="note">static mockup — button clicks only preview the locked state; nothing is sent anywhere</p>
+
+<script>
+// Illustration only: clicking a response previews the "locked, awaiting outcome" modal state.
+(function () {
+  var foot = document.getElementById("mFoot");
+  var myState = document.getElementById("myState");
+  foot.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-resp]");
+    if (!btn || btn.disabled) return;
+    foot.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    myState.textContent = btn.dataset.word;
+    document.getElementById("myChip").classList.add("passed");
+    var line = document.createElement("div");
+    line.className = "m-status";
+    line.textContent = "You answered: " + btn.dataset.label + " — the table is deciding…";
+    foot.replaceWith(line);
+  });
+})();
+</script>
+</body>
+</html>

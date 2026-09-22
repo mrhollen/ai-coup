@@ -5,8 +5,8 @@ the social-deduction card game this project recreates. It is NOT the unrelated 2
 People board game also titled *Coup* — do not confuse them.
 
 Sources: BGG wiki description for boardgame/131357 (based on the printed manual, incl.
-designer comments) and the Wikipedia article "Coup (card game)". Where sources leave gaps,
-they are listed in [Open questions](#open-questions) with a suggested default.
+designer comments) and the Wikipedia article "Coup (card game)". Where sources left gaps,
+the final decisions are recorded in [Rulings](#rulings).
 
 ## Objective & Win Condition
 
@@ -70,10 +70,12 @@ This is the core bluff mechanic:
 
 1. A player performs or defends with a claimed character action. It **succeeds immediately** unless challenged.
 2. Any other player may challenge the claim (whether or not they are the target).
-3. The claimant must **reveal that exact character** from their face-down cards.
-   - **Cannot / chooses not to reveal** → the claimant loses one influence: one of their remaining
-     face-down cards, their choice, is turned face-up in front of them (publicly known).
-   - **Reveals it** → the challenger loses one influence the same way. A player may challenge only once per action; if multiple players challenge, resolve first-come-first-served (see open questions).
+3. The claimant must **reveal that exact character** from their face-down cards — revealing is
+   obligatory, not optional ([Ruling 7](#rulings)).
+   - **Cannot reveal** (the claimed character is not among their face-down cards) → the claimant
+     loses one influence: one of their remaining face-down cards, their choice, is turned face-up
+     in front of them (publicly known).
+   - **Reveals it** → the challenger loses one influence the same way. A player may challenge only once per action; when several would challenge at once, the game's response-window rules decide — see [Ruling 5](#rulings) and `docs/technical-spec.md` §5.
 4. On a successful reveal, the revealed card is **shuffled into the Court Deck and its owner draws
    one replacement** face-down card (so they may or may not regain the same character).
 
@@ -85,7 +87,7 @@ Notes:
 ## Elimination & end of turn effects
 
 - Whenever a player loses influence (failed claim, failed challenge, Coup, or Assassinate),
-  they choose which of their remaining face-down cards goes face-up. (Interpretation — see open questions.)
+  they choose which of their remaining face-down cards goes face-up. (Confirmed — see [Ruling 2](#rulings).)
 - When both cards are face-up the player is eliminated; turns skip them.
 - Game ends immediately when only one player has any influence left.
 
@@ -104,22 +106,37 @@ turn(player)
       → resolve reveal-or-penalty; on success shuffle revealed card back + redraw
 ```
 
-## Open questions
+## Rulings
 
-Not fully pinned down by the sources above; decide and record the ruling here before implementing:
+Final decisions recorded here before implementation (supersede the earlier open questions).
+These are normative for the engine together with `docs/technical-spec.md`.
 
-1. **Who may counterclaim?** "Block someone from stealing *your* coins" implies only the target
-   may block Steal/Assassinate; Duke-vs-Foreign-Aid has no obvious target (blocker is a bystander?).
-   Suggested default: Steal/Assassinate — target only; Foreign Aid — any player.
-2. **Coup at exactly 10 coins** is mandatory ("if you have ten coins, you must take this action");
-   the "≥10" reading used above is a superset. Pick one and encode it.
-3. **Card lost to Coup/Assassinate:** whose choice — the victim's or the attacker's?
-   Suggested default: victim chooses (mirrors the challenge penalty).
-4. **Court Deck exhaustion:** if Exchange draws the last cards, presumably Exchange is simply
-   unavailable; game continues to elimination. Confirm.
-5. **Multiple challengers / timing of counterclaims in a digital room** — define the request/response
-   ordering for AI agents (suggested: target gets first response, then any other player may challenge).
-6. **Starting turn order** — pick randomly or fixed seat order; not specified by the sources.
+1. **Coup at ≥10 coins is mandatory.** The superset reading ("ten *or more*") is adopted: a player
+   holding 10 or more coins must take Coup on their turn; it is the only legal action for them
+   while they hold that many. Exactly-10 therefore forces Coup (the old question 2 is closed).
+2. **Card lost to Coup/Assassinate: the victim chooses** which of their face-down cards flips —
+   mirroring the challenge penalty. With one card remaining there is no choice; it auto-flips.
+3. **Counterclaim eligibility is personal.** Only the target of an attack may block it with their
+   *own* cards (Steal → Captain or Ambassador; Assassinate → Contessa); every other active
+   player's power over a claimed action is to challenge. Foreign Aid has no personal target, so it
+   is the one exception: any active player *except the aid-taker* may counterclaim with Duke, and
+   that blocking claim then faces its own challenge window (see `docs/technical-spec.md` §5).
+4. **Court Deck exhaustion is impossible — Exchange is always legal.** The Court Deck size is
+   constant at `15 − 2×(player count)` for the whole game: Exchange draws two and returns two
+   (net zero), and a successful challenge resolution shuffles the revealed card back in while its
+   owner draws one replacement (net zero). With 6 players the deck never drops below 3 cards, so
+   the old question 4 is closed by this invariant.
+5. **Multiple challengers are settled by the creator-configured response window.** All eligible
+   players receive a single window that opens simultaneously; the **first non-PASS response wins**
+   regardless of seat type. At game creation the host may additionally require *all* eligible
+   players to respond and/or set a timeout that auto-passes unresponded seats — see
+   `docs/technical-spec.md` §5 (the old first-come-first-served question 5 is superseded).
+6. **Starting turn: random seat, then fixed seat order** (skipping eliminated players).
+7. **Revealing is mandatory — there is no refusing option.** A challenged claimant who *holds* the
+   claimed character in hand is OBLIGED to reveal it; "choose not to reveal and take the penalty
+   instead" does not exist as a choice. The influence penalty (one of the remaining face-down
+   cards, the claimer's choice, flipped face-up) applies **only** when the claimant does NOT hold
+   the claimed character.
 
 ## Out of scope (expansions exist but are not part of this spec)
 
