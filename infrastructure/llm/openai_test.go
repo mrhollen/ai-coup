@@ -138,7 +138,9 @@ func toolCallMsg(id, name, args string) map[string]any {
 	return m
 }
 
-func contentMsg(text string) map[string]any { return map[string]any{"role": "assistant", "content": text} }
+func contentMsg(text string) map[string]any {
+	return map[string]any{"role": "assistant", "content": text}
+}
 
 func openaiIn(kind app.DecisionKind, youCoins int) app.DecisionInput {
 	seats := []app.SeatView{
@@ -224,8 +226,8 @@ func TestOpenAI_TurnActionToolCallHappyPath(t *testing.T) {
 // shape (including the shape-derived claimed characters).
 func TestOpenAI_TurnToolCallShapes(t *testing.T) {
 	cases := []struct {
-		name, args   string
-		want        app.Candidate
+		name, args string
+		want       app.Candidate
 	}{
 		{"income", "", app.Candidate{Kind: app.KindTurnAction, Action: "income"}},
 		{"foreign_aid", "", app.Candidate{Kind: app.KindTurnAction, Action: "foreign_aid"}},
@@ -704,7 +706,7 @@ func TestOpenAI_CancellationAbortsInFlightRequest(t *testing.T) {
 // NEVER appended to the stored conversation (asserted on the wire of the NEXT
 // request, which resends the whole conversation).
 func TestOpenAI_ReasoningContentNotStoredLoggedOnlyWhenDebug(t *testing.T) {
-	const marker = "ENDMARKER" // must not survive truncation nor storage
+	const marker = "ENDMARKER"                      // must not survive truncation nor storage
 	reasoning := strings.Repeat("R", 5000) + marker // > 4KB
 
 	srv := newScriptedChatServer(t, func(n int, req chatRequest) (int, []byte) {
