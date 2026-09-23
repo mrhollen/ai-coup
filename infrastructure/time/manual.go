@@ -77,3 +77,11 @@ func (m *ManualClock) AdvanceTo(t time.Time) {
 		m.Advance(delta)
 	}
 }
+
+// Pending reports how many After timers are currently armed (test hook: lets
+// a test wait until a caller has actually armed its hold timer).
+func (m *ManualClock) Pending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.timers)
+}

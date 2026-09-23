@@ -18,9 +18,9 @@ import (
 // from the Clock when the batch is appended (§10). Privacy filtering lives in
 // Range: a viewer's stream is public events plus that seat's own private ones.
 type MemoryEventStore struct {
-	mu     sync.RWMutex
-	clock  application.Clock
-	events map[string][]application.EventOut
+	mu      sync.RWMutex
+	clock   application.Clock
+	events  map[string][]application.EventOut
 	waiters map[string][]*waiter
 }
 

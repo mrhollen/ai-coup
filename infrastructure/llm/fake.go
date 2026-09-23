@@ -16,14 +16,23 @@ import (
 //   - Err: return it immediately
 //   - BlockUntilCancel: block until the decision context is cancelled, then
 //     return the ctx error — used to assert cancellation properties (§5.2.6)
+//
+// Gate (optional test barrier): when non-nil, Decide waits for it to close
+// BEFORE acting on the step; a concurrent ctx cancellation still wins.
 type Step struct {
 	Candidate        *application.Candidate
 	Err              error
 	BlockUntilCancel bool
+	Gate             chan struct{}
 }
 
 // CandidateStep is sugar for a plain candidate step.
 func CandidateStep(c application.Candidate) Step { return Step{Candidate: &c} }
+
+// GatedStep holds the given candidate until the gate closes (test barrier).
+func GatedStep(gate chan struct{}, c application.Candidate) Step {
+	return Step{Candidate: &c, Gate: gate}
+}
 
 // BlockStep is sugar for a cancel-blocking step.
 func BlockStep() Step { return Step{BlockUntilCancel: true} }
@@ -80,6 +89,16 @@ func (f *FakeDriver) Decide(ctx context.Context, in application.DecisionInput) (
 	}
 	f.mu.Unlock()
 
+	if step.Gate != nil {
+		select {
+		case <-step.Gate:
+		case <-ctx.Done():
+			f.mu.Lock()
+			f.canceled = append(f.canceled, in.SeatID)
+			f.mu.Unlock()
+			return application.Candidate{}, ctx.Err()
+		}
+	}
 	switch {
 	case step.BlockUntilCancel:
 		<-ctx.Done()
