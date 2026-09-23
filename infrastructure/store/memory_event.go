@@ -24,9 +24,15 @@ type MemoryEventStore struct {
 	waiters map[string][]*waiter
 }
 
+// waiter is one pending WaitNew registration. closeOnce guards the wake-up
+// channel: two Appends can both collect the same waiter before WaitNew
+// deregisters it (the collection happens under the store lock, the close
+// outside it), and a second close of an already-closed channel would panic
+// the whole process — so the close is exactly-once by construction.
 type waiter struct {
-	after int64
-	ch    chan struct{}
+	after     int64
+	ch        chan struct{}
+	closeOnce sync.Once
 }
 
 // NewMemoryEventStore builds the store; clock stamps appended events.
@@ -59,7 +65,7 @@ func (s *MemoryEventStore) Append(_ context.Context, gameID string, evts []domai
 	}
 	s.mu.Unlock()
 	for _, w := range wake {
-		close(w.ch)
+		w.closeOnce.Do(func() { close(w.ch) }) // exactly once, even if collected twice (see waiter)
 	}
 	return first, nil
 }
