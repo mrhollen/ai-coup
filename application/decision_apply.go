@@ -39,6 +39,13 @@ func (h *gameHandle) runDecision(f *flight, in DecisionInput) {
 		cand, derr := h.app.driver.Decide(f.ctx, in)
 		inference := h.app.deps.Clock.Now().Sub(t0)
 		if derr != nil {
+			if f.ctx.Err() != nil {
+				// Cancellation, not failure: the structure closed or the server
+				// is shutting down. Already logged as llm_cancelled upstream —
+				// a normal cancellation must not surface as an ERROR line.
+				h.logDiscard(f, in.Kind, "cancelled")
+				return
+			}
 			// Terminal driver failure (e.g. scripted queue exhausted). The openai
 			// driver blocks until it produces a candidate or its context is
 			// cancelled (§6.4.6), so this path is mostly for the fake driver;

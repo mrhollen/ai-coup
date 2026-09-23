@@ -120,9 +120,12 @@ func (h *gameHandle) logBatch(g *domain.Game, evs []domain.Event, info batchInfo
 				"eligible", payloadSlice(e.Payload, "eligible"),
 				"require_all_responses", payloadBool(e.Payload, "require_all_responses"),
 				"timeout_ms", payloadInt(e.Payload, "timeout_ms"))...)
-			if h.meta != nil && h.meta.id == wid {
+			// §12 lifecycle "issued" line: the deadline derives from the event's
+			// own timeout (this batch IS the opening, so no meta lookup — h.meta
+			// is reconciled only after this batch is logged).
+			if tm := payloadInt(e.Payload, "timeout_ms"); tm > 0 {
 				h.app.log.Info("window_opened_deadline", append(logGameContext(h.id, g.TurnID, e.Seq),
-					"window_id", wid, "deadline_at", now.Add(time.Duration(h.meta.timeoutMs)*time.Millisecond).UTC().Format(time.RFC3339))...)
+					"window_id", wid, "deadline_at", now.Add(time.Duration(tm)*time.Millisecond).UTC().Format(time.RFC3339))...)
 			}
 		case "response_received":
 			wid, _ := e.Payload["window_id"].(string)
@@ -151,23 +154,18 @@ func (h *gameHandle) logBatch(g *domain.Game, evs []domain.Event, info batchInfo
 			h.app.log.Info("window_closed", line...)
 		case "card_flip_choice_requested", "exchange_revealed":
 			var decID, kind string
-			if dec, ok := e.Payload["decision"].(map[string]any); ok {
+			var tm int                                                 // the event's own timeout (§5.4), not a meta lookup: this
+			if dec, ok := e.Payload["decision"].(map[string]any); ok { // batch may carry a structure that postdates h.meta
 				decID, _ = dec["id"].(string)
 				kind, _ = dec["kind"].(string)
+				tm, _ = dec["timeout_ms"].(int)
 			}
 			h.app.log.Info("decision_opened", append(logGameContext(h.id, g.TurnID, e.Seq),
 				"decision_id", decID, "kind", kind,
 				"seat_id", payloadString(e.Payload, "seat_id"),
-				"timeout_ms", h.metaTimeout())...)
+				"timeout_ms", tm)...)
 		}
 	}
-}
-
-func (h *gameHandle) metaTimeout() int {
-	if h.meta != nil {
-		return h.meta.timeoutMs
-	}
-	return 0
 }
 
 // logEventState is the per-event "state" line of §12: consistent context
@@ -304,43 +302,56 @@ func (h *gameHandle) cancelFlightLocked(f *flight, reason string) {
 }
 
 // reconcileStructureLocked updates the open-structure bookkeeping (timer,
-// heartbeat, trigger summary) to match the engine state after the batch. The
-// caller holds h.mu.
+// heartbeat, trigger summary) to match the engine state after the batch. When
+// the SAME structure is still open, its meta is kept untouched: openedAt and
+// the armed timeout deadline must not slide as responses land (§5.2 rows 2/4),
+// only one watch set may run per structure (one A11 heartbeat line per tick),
+// and the trigger summary of the opener batch survives. The caller holds h.mu.
 func (h *gameHandle) reconcileStructureLocked(g *domain.Game, evs []domain.Event, info batchInfo) {
 	var newMeta *structureMeta
 	switch g.Phase() {
 	case domain.PhaseWindowOpen:
 		wv := g.WindowView()
 		if wv != nil {
-			newMeta = &structureMeta{
-				id:        wv.ID,
-				kind:      "window",
-				openedAt:  h.app.deps.Clock.Now(),
-				timeoutMs: wv.Settings.TimeoutMs,
-				trigger:   info.newTrigger,
-				stop:      make(chan struct{}),
-			}
+			newMeta = h.structureMeta("window", wv.ID, wv.Settings.TimeoutMs, info.newTrigger)
 		}
 	case domain.PhaseSingleSeatDecision:
 		dv := g.DecisionView()
 		if dv != nil {
-			newMeta = &structureMeta{
-				id:        dv.ID,
-				kind:      "decision",
-				openedAt:  h.app.deps.Clock.Now(),
-				timeoutMs: dv.TimeoutMs,
-				trigger:   info.newTrigger,
-				stop:      make(chan struct{}),
-			}
+			newMeta = h.structureMeta("decision", dv.ID, dv.TimeoutMs, info.newTrigger)
 		}
 	}
-	if h.meta != nil && (newMeta == nil || newMeta.id != h.meta.id) {
+	if newMeta == h.meta { // the same structure is still open: keep its bookkeeping
+		return
+	}
+	if h.meta != nil {
 		close(h.meta.stop)
 		delete(h.done, h.meta.id)
 	}
 	h.meta = newMeta
 	if newMeta != nil {
 		h.startStructureWatches(newMeta)
+	}
+}
+
+// structureMeta returns the bookkeeping meta for an open structure: the
+// existing h.meta when it is this very structure (its openedAt, deadline,
+// trigger and stop channel survive response batches), else a fresh one. The
+// caller holds h.mu.
+func (h *gameHandle) structureMeta(kind, id string, timeoutMs int, newTrigger string) *structureMeta {
+	if m := h.meta; m != nil && m.id == id {
+		if m.trigger == "" && newTrigger != "" {
+			m.trigger = newTrigger // backfill if the opener batch carried no summary
+		}
+		return m
+	}
+	return &structureMeta{
+		id:        id,
+		kind:      kind,
+		openedAt:  h.app.deps.Clock.Now(),
+		timeoutMs: timeoutMs,
+		trigger:   newTrigger,
+		stop:      make(chan struct{}),
 	}
 }
 

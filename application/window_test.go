@@ -250,6 +250,10 @@ func TestLLMCancellationOnWindowClose(t *testing.T) {
 		// A Duke-tax costs nothing: the window's opening must not depend on a
 		// banked player.
 		h.driver.Queue(seatIDn(2), llm.CandidateStep(app.Candidate{Kind: app.KindTurnAction, Action: "tax", Character: "duke"}))
+		// B's script must also cover the flip choice he owes if A's challenge
+		// succeeds (claim failed ⇒ B loses an influence) — an exhausted fake
+		// queue would otherwise log a legitimate terminal driver_error.
+		h.driver.Queue(seatIDn(2), llm.CandidateStep(app.Candidate{Kind: app.KindSingleSeatChoice, Choice: "face_down_0"}))
 		h.driver.Queue(seatIDn(3), llm.BlockStep())
 	}, nil)
 	aID := res.Seats[0].ID
@@ -269,6 +273,27 @@ func TestLLMCancellationOnWindowClose(t *testing.T) {
 	logs := h.logBuf.String()
 	if !strings.Contains(logs, `"msg":"llm_cancelled"`) || !strings.Contains(logs, `"reason":"window_closed:first_response"`) {
 		t.Fatalf("expected llm_cancelled log with window reason; logs: %s", tail(logs))
+	}
+	// A cancellation is not a terminal failure: the blocked Decide returns
+	// ctx.Err on cancel, so the cancelled window flight must log llm_discarded
+	// and must NOT surface as an ERROR driver_error for that structure (§12
+	// keeps cancellations at INFO). (LATER turns owed by seats whose fake
+	// scripts ran out may still log their legitimate queue-exhaustion error.)
+	h.waitFor(t, "llm_discarded logged for the cancelled decision", func() bool {
+		return strings.Contains(h.logBuf.String(), `"msg":"llm_discarded"`) &&
+			strings.Contains(h.logBuf.String(), `"reason":"cancelled"`)
+	})
+	var wid string
+	for _, e := range h.stream(t, res.GameID, aID) {
+		if e.Type == "window_opened" {
+			wid, _ = e.Payload["window_id"].(string)
+		}
+	}
+	logs = h.logBuf.String()
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, `"msg":"driver_error"`) && strings.Contains(line, `"structure":"`+wid) {
+			t.Fatalf("cancellation must not log an ERROR driver_error for the cancelled window; line: %s", line)
+		}
 	}
 	// The discarded late candidate must not have produced a rejection event on
 	// C's stream nor any engine effect.
