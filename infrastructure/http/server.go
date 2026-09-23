@@ -179,19 +179,23 @@ func (s *Server) accessLogMiddleware() func(http.Handler) http.Handler {
 				}
 			}
 			ctx := context.WithValue(r.Context(), sessionKey{}, sess)
-			rec := &statusRecorder{ResponseWriter: rw, status: http.StatusOK}
+			rec := &statusRecorder{ResponseWriter: rw} // zero status ⇒ implicit 200 if no WriteHeader
 			next.ServeHTTP(rec, r.WithContext(ctx))
 
 			seat := "-"
 			if sess != nil {
 				seat = sess.SeatID
 			}
+			status := rec.status
+			if status == 0 {
+				status = http.StatusOK // written without an explicit WriteHeader
+			}
 			s.Log.Info("http_request",
 				"request_id", requestIDFrom(ctx),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"seat_id", seat,
-				"status", rec.status,
+				"status", status,
 				"latency_ms", time.Since(start).Milliseconds(),
 			)
 		})
