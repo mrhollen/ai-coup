@@ -6,9 +6,11 @@
 // llama-server owns it in dev (§1) and must never be disturbed. The only
 // third-party dependency is chi (§1).
 //
-// This slice wires the UNAVAILABLE LLM driver stub: heuristic/openai factories
-// arrive later, so any game containing LLM seats fails fast at creation (see
-// application.CreateGame); human-vs-human games work end-to-end now.
+// The MoveDriver is selected by COUP_DRIVER_MODE (default "heuristic"): the
+// built-in deterministic heuristic driver (A7, zero external services) or the
+// OpenAI-compatible tool-calling driver (§6.4; requires COUP_LLM_MODEL — A6
+// fail-fast above). Both claim LLMCapable, so games with LLM seats run
+// unattended end-to-end.
 package main
 
 import (
@@ -182,12 +184,16 @@ func main() {
 	// --- wire the ports (spec §2: composition root is the only binding site) --
 	events := store.NewMemoryEventStore(clock.NewWallClock())
 	games := store.NewMemoryGameStore()
-	// This slice's LLM driver is the unavailable stub regardless of the
-	// configured mode: the heuristic/openai factories arrive in a later slice.
-	// The stub reports CanDriveLLM()=false, so CreateGame fails fast (400 with a
-	// clear message) for any game containing LLM seats; human-only games run
-	// end-to-end (§6.2). The mode is still validated above and named in logs.
-	driver := llm.NewUnavailableDriver(cfg.DriverMode)
+	// COUP_DRIVER_MODE selects the MoveDriver backing LLM seats (§6.2). Both
+	// real drivers claim LLMCapable, so LLM seats are admitted at creation and
+	// driven to completion (A4 guarantees no decision can permadeath a game).
+	var driver app.MoveDriver
+	switch cfg.DriverMode {
+	case "openai": // §6.4: base URL + model from env/flags (validated above)
+		driver = llm.NewOpenAIDriver(cfg.LLMBaseURL, cfg.LLMModel, log, cfg.Debug)
+	default: // heuristic (default; the only other validated value)
+		driver = llm.NewHeuristicDriver()
+	}
 	a := app.NewApplication(app.Dependencies{
 		Events: events,
 		Games:  games,
@@ -210,7 +216,11 @@ func main() {
 	defer stop()
 
 	go func() {
-		log.Warn("llm driver unavailable in this build: LLM seats are rejected at game creation until the heuristic/openai drivers land (spec §6.2); human-only games work", "driver_mode", cfg.DriverMode)
+		if cfg.DriverMode == "openai" {
+			log.Info("llm_driver_selected", "driver_mode", "openai", "llm_base_url", cfg.LLMBaseURL, "llm_model", cfg.LLMModel)
+		} else {
+			log.Info("llm_driver_selected", "driver_mode", "heuristic")
+		}
 		log.Info("listening", "addr", httpSrv.Addr, "poll_hold_ms", int(cfg.PollHold.Milliseconds()), "debug", cfg.Debug, "llm_base_url", cfg.LLMBaseURL)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server_failed", "err", err)
