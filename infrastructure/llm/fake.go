@@ -1,6 +1,6 @@
-// Package llm hosts the MoveDriver adapters (spec §2.1). This slice ships the
-// scripted fake driver only — tests-only, not selectable at runtime (§6.2);
-// heuristic and openai drivers arrive in later slices.
+// Package llm hosts the MoveDriver adapters (spec §2.1/§6.2). This slice ships
+// the scripted fake driver (tests only) and the unavailable stub that stands
+// in for the heuristic/openai drivers, which arrive in later slices.
 package llm
 
 import (
@@ -65,6 +65,10 @@ func NewFakeDriver() *FakeDriver {
 
 // Name implements MoveDriver.
 func (f *FakeDriver) Name() string { return "fake" }
+
+// CanDriveLLM implements application.LLMCapable: the fake can drive LLM seats
+// with scripted steps, so test compositions may create games containing them.
+func (f *FakeDriver) CanDriveLLM() bool { return true }
 
 // Queue appends scripted steps for one seat (FIFO per seat).
 func (f *FakeDriver) Queue(seatID string, steps ...Step) {

@@ -63,6 +63,13 @@ func (a *Application) CreateGame(ctx context.Context, req CreateGameRequest) (*C
 	if err != nil {
 		return nil, err
 	}
+	// Fast fail when LLM seats are requested but the configured driver cannot
+	// drive them (spec §6.2): reject at creation with a clear message instead
+	// of letting the first LLM turn wedge mid-game. Human-only requests never
+	// touch this check.
+	if hasLLMSpec(specs) && !driverDrivesLLMs(a.deps.Driver) {
+		return nil, NewAppError(ErrInvalidInput, "llm seats cannot join in this build: the LLM driver is not available yet — create a human-only game", 400)
+	}
 	if req.ResponseTimeoutMs < 0 {
 		return nil, NewAppError(ErrInvalidInput, "response_timeout must be zero or a positive duration", 400)
 	}
@@ -167,4 +174,21 @@ func normalizePlayerSpecs(players []PlayerSpec) ([]domain.SeatSpec, error) {
 		return nil, NewAppError(ErrInvalidInput, "a game needs at least one human seat", 400)
 	}
 	return out, nil
+}
+
+// hasLLMSpec reports whether any normalized seat is server-driven (spec §6.2).
+func hasLLMSpec(specs []domain.SeatSpec) bool {
+	for _, s := range specs {
+		if s.Type == domain.SeatLLM {
+			return true
+		}
+	}
+	return false
+}
+
+// driverDrivesLLMs reports whether the configured MoveDriver claims the
+// LLMCapable marker (§6.2). A nil driver drives nothing.
+func driverDrivesLLMs(d MoveDriver) bool {
+	c, ok := d.(LLMCapable)
+	return ok && c.CanDriveLLM()
 }

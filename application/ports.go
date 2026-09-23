@@ -42,6 +42,17 @@ type MoveDriver interface {
 	Decide(ctx context.Context, in DecisionInput) (Candidate, error)
 }
 
+// LLMCapable is an OPTIONAL marker implemented by MoveDrivers that can drive
+// LLM seats (spec §6.2): the fake driver (test compositions), and — once they
+// land — heuristic and openai. CreateGame rejects any request containing LLM
+// seats when the configured driver does not claim this capability, so a build
+// whose LLM drivers are not wired yet (this slice's unavailable stub) fails
+// fast at creation with a clear message instead of stalling on the first LLM
+// turn. Human-only games are never affected by the check.
+type LLMCapable interface {
+	CanDriveLLM() bool
+}
+
 // DecisionKind names what is being asked of a seat (spec §2.2).
 type DecisionKind int
 
