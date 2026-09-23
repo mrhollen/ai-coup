@@ -452,6 +452,11 @@ func (h *gameHandle) drivePendingLocked(g *domain.Game, info batchInfo) {
 		if h.isDone(dv.ID, dv.SeatID) {
 			return
 		}
+		// A decision addressed to a HUMAN seat is answered by that client —
+		// the driver must never drive it (§6.3: drivers only occupy LLM seats).
+		if seat := lookupSeat(g, dv.SeatID); seat == nil || seat.Type != domain.SeatLLM {
+			return
+		}
 		req := Request{ChoiceKind: dv.Kind.String(), Options: choiceOptions(dv)}
 		h.dispatchLocked(g, dv.SeatID, KindSingleSeatChoice, req, dv.ID)
 	}
