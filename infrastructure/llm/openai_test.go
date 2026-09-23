@@ -164,7 +164,9 @@ func alwaysRespond(t *testing.T, msg func() map[string]any) func(int, chatReques
 // --- tests -------------------------------------------------------------------
 
 func TestOpenAI_NameAndCapability(t *testing.T) {
-	d := NewOpenAIDriver("http://localhost:8080/v1", "m", nil, false)
+	// Never dialed here (Name/capability only); no fixed host or port is
+	// referenced from test code (§14.3 port discipline).
+	d := NewOpenAIDriver("http://unit-test.invalid/v1", "m", nil, false)
 	if got := d.Name(); got != "openai" {
 		t.Fatalf("Name() = %q, want openai", got)
 	}
