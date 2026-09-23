@@ -137,7 +137,10 @@ func (h *gameHandle) applyCandidate(f *flight, cand Candidate) applyOutcome {
 }
 
 // applyKindDefault applies the A4 kind-safe default after the driver retry
-// budget is exhausted: turn ⇒ income, window ⇒ pass, choice ⇒ engine default
+// budget is exhausted: turn ⇒ income — except while Coup is MANDATORY at ≥10
+// coins (rules.md Ruling 1), where the default is a coup against a valid
+// target, since plain income would fail engine validation and stall the
+// decision until timeout/forfeit; window ⇒ pass; choice ⇒ engine default
 // (first flip option / no-swap). It never loops: one shot, log, move on.
 func (h *gameHandle) applyKindDefault(f *flight) {
 	h.mu.Lock()
@@ -145,11 +148,15 @@ func (h *gameHandle) applyKindDefault(f *flight) {
 	g := h.g
 	var evs []domain.Event
 	var err error
+	var a domain.Action
+	defName := "income"
 	switch f.kind {
 	case KindTurnAction:
-		evs, err = g.DeclareTurnAction(f.seatID, domain.Action{Kind: domain.Income})
+		a, defName = kindSafeTurnAction(g, f.seatID)
+		evs, err = g.DeclareTurnAction(f.seatID, a)
 	case KindWindowResponse:
 		evs, err = g.SubmitWindowResponse(f.seatID, domain.WindowResponse{Kind: domain.RespPass})
+		defName = "pass"
 	case KindSingleSeatChoice:
 		dv := g.DecisionView()
 		if dv == nil || dv.ID != f.structID {
@@ -157,6 +164,7 @@ func (h *gameHandle) applyKindDefault(f *flight) {
 			return
 		}
 		evs, err = g.AnswerDecision(f.seatID, dv.ID, dv.Kind.DefaultChoice())
+		defName = "engine_default"
 	}
 	if err != nil {
 		h.app.log.Error("decision_fallback_failed", []any{"game_id", h.id, "player_id", f.seatID, "kind", f.kind.String(), "err", err}...)
@@ -166,18 +174,34 @@ func (h *gameHandle) applyKindDefault(f *flight) {
 		h.app.log.Error("decision_fallback_commit_failed", []any{"game_id", h.id, "player_id", f.seatID, "err", aerr}...)
 		return
 	}
-	h.app.log.Warn("decision_fallback", []any{"game_id", h.id, "player_id", f.seatID, "kind", f.kind.String(), "structure", f.structID, "default", kindDefaultName(f.kind)}...)
+	h.app.log.Warn("decision_fallback", []any{"game_id", h.id, "player_id", f.seatID, "kind", f.kind.String(), "structure", f.structID, "default", defName}...)
 }
 
-func kindDefaultName(k DecisionKind) string {
-	switch k {
-	case KindTurnAction:
-		return "income"
-	case KindWindowResponse:
-		return "pass"
-	default:
-		return "engine_default"
+// kindSafeTurnAction is the engine-safe default action for a turn-action
+// decision: income — except while Coup is MANDATORY at ≥10 coins (rules.md
+// Ruling 1), where income would fail validation ("you must take a coup...")
+// and leave the decision stalled until timeout/forfeit. There the safe default
+// is a coup against the first active non-self seat: legal by construction (an
+// active seat still holds influence, so it cannot be eliminated) and
+// deterministic. It mirrors the openai driver's own kindSafeDefault so every
+// fallback this layer can commit is accepted by the engine on a live
+// structure. The name ("income"|"coup") is returned for the decision_fallback
+// log line.
+func kindSafeTurnAction(g *domain.Game, seatID string) (domain.Action, string) {
+	for _, s := range g.Seats {
+		if s.ID != seatID || s.Coins < domain.MandatoryCoupThreshold {
+			continue
+		}
+		for _, t := range g.Seats {
+			if t.ID != seatID && t.Active() {
+				return domain.Action{Kind: domain.Coup, TargetID: t.ID}, "coup"
+			}
+		}
+		// Unreachable on a live game owing this turn (a lone active seat ends
+		// the game): fall through to income and let the engine error surface.
+		break
 	}
+	return domain.Action{Kind: domain.Income}, "income"
 }
 
 // parseAction converts a candidate into a domain action. Unparseable shapes
