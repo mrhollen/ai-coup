@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"forgejo.lan/mrhollen/ai-coup/domain"
@@ -133,6 +134,25 @@ type EventOut struct {
 	Type     string
 	Audience domain.Audience
 	Payload  map[string]any
+}
+
+// MarshalJSON renders the §10 wire shape: seq/game_id/ts/type/audience plus
+// the type-specific payload fields flattened into one object.
+func (e EventOut) MarshalJSON() ([]byte, error) {
+	var aud any = "public"
+	if e.Audience.SeatID != "" {
+		aud = map[string]string{"seat": e.Audience.SeatID}
+	}
+	m := make(map[string]any, len(e.Payload)+5)
+	for k, v := range e.Payload {
+		m[k] = v
+	}
+	m["seq"] = e.Seq
+	m["game_id"] = e.GameID
+	m["ts"] = e.TS
+	m["type"] = e.Type
+	m["audience"] = aud
+	return json.Marshal(m)
 }
 
 // EventStore is append-only, per-game, with audience-tagged events (spec §2.2,

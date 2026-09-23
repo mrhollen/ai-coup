@@ -12,16 +12,16 @@ import (
 // face-down cards appear only for the viewer's own seat; LLM seats have no
 // snapshots at all (no token exists for them).
 type Snapshot struct {
-	GameID          string            `json:"game_id"`
-	Status          string            `json:"status"` // "in_progress" | "finished"
-	WinnerID        *string           `json:"winner_id"`
-	WindowSettings  WindowSettingsOut `json:"window_settings"`
-	CourtDeckSize   int               `json:"court_deck_size"`
-	Seats           []SeatSnap        `json:"seats"`
-	YourSeatID      string            `json:"your_seat_id"`
-	YourFaceDown    []string          `json:"your_face_down_cards"`
-	LastEventSeq    int64             `json:"last_event_seq"`
-	Current         *CurrentSnap      `json:"current"`
+	GameID         string            `json:"game_id"`
+	Status         string            `json:"status"` // "in_progress" | "finished"
+	WinnerID       *string           `json:"winner_id"`
+	WindowSettings WindowSettingsOut `json:"window_settings"`
+	CourtDeckSize  int               `json:"court_deck_size"`
+	Seats          []SeatSnap        `json:"seats"`
+	YourSeatID     string            `json:"your_seat_id"`
+	YourFaceDown   []string          `json:"your_face_down_cards"`
+	LastEventSeq   int64             `json:"last_event_seq"`
+	Current        *CurrentSnap      `json:"current"`
 }
 
 // SeatSnap is one seat's public view (all seats' coins and face-up cards are
@@ -39,36 +39,36 @@ type SeatSnap struct {
 // of turn_action / window_open / single_seat_decision / finished carries its
 // fields.
 type CurrentSnap struct {
-	Phase        string          `json:"phase"` // turn_action|window_open|single_seat_decision|finished
-	TurnID       int             `json:"turn_id,omitempty"`
-	TurnSeatID   string          `json:"turn_seat_id,omitempty"`
-	Window       *WindowSnap     `json:"window,omitempty"`
-	Decision     *DecisionSnap   `json:"decision,omitempty"`
+	Phase      string        `json:"phase"` // turn_action|window_open|single_seat_decision|finished
+	TurnID     int           `json:"turn_id,omitempty"`
+	TurnSeatID string        `json:"turn_seat_id,omitempty"`
+	Window     *WindowSnap   `json:"window,omitempty"`
+	Decision   *DecisionSnap `json:"decision,omitempty"`
 }
 
 // WindowSnap is the open window as a viewer sees it. YourAllowedResponses is
 // present only when the viewer is eligible (the response grammar — public
 // table information, never advice).
 type WindowSnap struct {
-	WindowID            string            `json:"window_id"`
-	Kind                string            `json:"kind"` // challenge | counterclaim_challenge
-	TargetSeatID        string            `json:"target_seat_id,omitempty"`
-	RequireAllResponses bool              `json:"require_all_responses"`
-	TimeoutMs           int               `json:"timeout_ms"`
-	DeadlineAt          *string           `json:"deadline_at,omitempty"`
-	YourAllowedResponses []string         `json:"your_allowed_responses,omitempty"`
-	ResponsesSoFar      map[string]string `json:"responses_so_far"`
+	WindowID             string            `json:"window_id"`
+	Kind                 string            `json:"kind"` // challenge | counterclaim_challenge
+	TargetSeatID         string            `json:"target_seat_id,omitempty"`
+	RequireAllResponses  bool              `json:"require_all_responses"`
+	TimeoutMs            int               `json:"timeout_ms"`
+	DeadlineAt           *string           `json:"deadline_at,omitempty"`
+	YourAllowedResponses []string          `json:"your_allowed_responses,omitempty"`
+	ResponsesSoFar       map[string]string `json:"responses_so_far"`
 }
 
 // DecisionSnap is the pending single-seat decision. Options appears ONLY for
 // the addressed viewer (seat-scoped, §8); every other viewer receives the same
 // object with options omitted.
 type DecisionSnap struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"` // flip_choice | exchange_finish
-	SeatID     string `json:"seat_id"`
-	Options    any    `json:"options,omitempty"` // addressed viewer only
-	TimeoutMs  int    `json:"timeout_ms"`
+	ID         string  `json:"id"`
+	Kind       string  `json:"kind"` // flip_choice | exchange_finish
+	SeatID     string  `json:"seat_id"`
+	Options    any     `json:"options,omitempty"` // addressed viewer only
+	TimeoutMs  int     `json:"timeout_ms"`
 	DeadlineAt *string `json:"deadline_at,omitempty"`
 }
 

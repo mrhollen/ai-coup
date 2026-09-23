@@ -63,25 +63,25 @@ func (a *Application) CreateGame(ctx context.Context, req CreateGameRequest) (*C
 	if err != nil {
 		return nil, err
 	}
+	if req.ResponseTimeoutMs < 0 {
+		return nil, NewAppError(ErrInvalidInput, "response_timeout must be zero or a positive duration", 400)
+	}
 	settings := domain.WindowSettings{RequireAllResponses: req.RequireAll, TimeoutMs: req.ResponseTimeoutMs}
 
 	gameID := a.deps.IDs.New("g")
-	domainSpecs := make([]domain.SeatSpec, 0, len(specs))
-	tokens := map[string]string{}
-	for _, s := range specs {
-		id := a.deps.IDs.New("s")
-		s.ID = id
-		domainSpecs = append(domainSpecs, s)
-		if s.Type == domain.SeatHuman {
+	tokens := map[string]string{} // token → seatID (for ResolveToken lookups)
+	for i := range specs {
+		specs[i].ID = a.deps.IDs.New("s")
+		if specs[i].Type == domain.SeatHuman {
 			tok, terr := a.deps.TokenSource()
 			if terr != nil {
 				return nil, NewAppError(ErrServer, "token generation failed", 500)
 			}
-			tokens[id] = tok
+			tokens[tok] = specs[i].ID
 		}
 	}
 
-	g, evs, err := domain.NewGame(gameID, domainSpecs, settings, a.deps.IDs, a.deps.Rng)
+	g, evs, err := domain.NewGame(gameID, specs, settings, a.deps.IDs, a.deps.Rng)
 	if err != nil {
 		return nil, FromDomain(err)
 	}
@@ -110,11 +110,22 @@ func (a *Application) CreateGame(ctx context.Context, req CreateGameRequest) (*C
 			ID:    specs[i].ID,
 			Name:  specs[i].Name,
 			Type:  specs[i].Type.String(),
-			Token: tokens[specs[i].ID], // "" for LLM seats (omitted by json)
+			Token: seatToken(tokens, specs[i].ID), // "" for LLM seats (omitted by json)
 		})
 	}
 	a.log.Info("game_created", []any{"game_id", gameID, "seats", len(specs), "require_all_responses", settings.RequireAllResponses, "response_timeout_ms", settings.TimeoutMs, "first_turn_seat_id", result.FirstTurnSeatID}...)
 	return result, nil
+}
+
+// seatToken finds one seat's bearer token in the token→seat map (the reverse
+// of ResolveToken's direction).
+func seatToken(tokens map[string]string, seatID string) string {
+	for tok, sid := range tokens {
+		if sid == seatID {
+			return tok
+		}
+	}
+	return ""
 }
 
 // normalizePlayerSpecs validates the seat list and applies A14 name defaults.

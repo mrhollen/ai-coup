@@ -19,12 +19,12 @@ const (
 // handler decodes JSON straight into this struct; validation below turns the
 // payload checks into invalid_payload errors.
 type DecisionIn struct {
-	Kind       string         `json:"kind"` // "act" | "respond" | "choose"
-	Action     *ActionIn      `json:"action,omitempty"`
-	Response   *ResponseIn    `json:"response,omitempty"`
-	WindowID   string         `json:"window_id,omitempty"` // A16: implicit; a supplied mismatched id is rejected
-	DecisionID string         `json:"decision_id,omitempty"`
-	Choice     *ChoiceIn      `json:"choice,omitempty"`
+	Kind       string      `json:"kind"` // "act" | "respond" | "choose"
+	Action     *ActionIn   `json:"action,omitempty"`
+	Response   *ResponseIn `json:"response,omitempty"`
+	WindowID   string      `json:"window_id,omitempty"` // A16: implicit; a supplied mismatched id is rejected
+	DecisionID string      `json:"decision_id,omitempty"`
+	Choice     *ChoiceIn   `json:"choice,omitempty"`
 }
 
 // ActionIn is the wire shape of an act submission. Character is required for
@@ -55,15 +55,15 @@ type ChoiceIn struct {
 // named face-down hand_option to the Court Deck as an unordered set.
 type ExchangeFinishIn struct {
 	NoSwap     bool   `json:"no_swap"`
-	DrawnIndex  int    `json:"drawn_index"` // 0 = left, 1 = right; only when !NoSwap
+	DrawnIndex int    `json:"drawn_index"` // 0 = left, 1 = right; only when !NoSwap
 	HandOption string `json:"hand_option,omitempty"`
 }
 
 // SubmitDecisionResult is the 202 body: accepted (queued for resolution), not
 // final outcome — outcomes arrive as events on the poll stream.
 type SubmitDecisionResult struct {
-	Accepted bool   `json:"accepted"`
-	EventSeq int64  `json:"event_seq"` // first seq of the resulting batch
+	Accepted bool  `json:"accepted"`
+	EventSeq int64 `json:"event_seq"` // first seq of the resulting batch
 }
 
 // SubmitDecision implements POST /games/{id}/decisions (spec §11.2): a single
