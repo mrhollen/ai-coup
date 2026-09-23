@@ -103,14 +103,23 @@ func (a *Application) CreateGame(ctx context.Context, req CreateGameRequest) (*C
 	a.register(h)
 	a.deps.Games.Put(g)
 
-	if _, err := h.run(func(*domain.Game) ([]domain.Event, error) { return evs, nil }); err != nil {
+	// Capture the first-turn seat INSIDE the locked run closure: the commit
+	// dispatches any LLM seat holding the first turn, and that driver goroutine
+	// may advance the turn as soon as this lock releases — reading
+	// g.TurnSeatIndex after the fact is both a data race and a wrong answer
+	// once an instant (test-fake) driver has already acted.
+	var firstTurn string
+	if _, err := h.run(func(game *domain.Game) ([]domain.Event, error) {
+		firstTurn = game.Seats[game.TurnSeatIndex].ID
+		return evs, nil
+	}); err != nil {
 		return nil, err
 	}
 
 	result := &CreateGameResult{
 		GameID:          gameID,
 		WindowSettings:  WindowSettingsOut{RequireAllResponses: settings.RequireAllResponses, ResponseTimeoutMs: settings.TimeoutMs},
-		FirstTurnSeatID: g.Seats[g.TurnSeatIndex].ID,
+		FirstTurnSeatID: firstTurn,
 	}
 	for i := range specs {
 		result.Seats = append(result.Seats, SeatOut{
