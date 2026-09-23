@@ -89,11 +89,13 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/debug/games/{id}", s.handleDebugGame)
 	}
 
-	// Static mount point for the later UI slice: the spec's delivery model is
-	// the Go server serving the built frontend at "/". The router is already
-	// wired so a file handler drops in here without touching any existing
-	// route; until that slice lands it answers 404 with the standard envelope
-	// (no UI is built in this slice).
+	// Static mount: the web client is served from the repo-root "web/"
+	// directory rooted at "/" (ui-spec U1 delivery model — same origin as the
+	// API, relative URLs only). The hash-routed SPA needs no path fallback:
+	// index.html lands at "/", assets under their own names, unknown paths
+	// 404. The handler keeps the §11.1 JSON envelope on misses (the established
+	// contract for unknown routes — asserted by the httptest suites) instead of
+	// net/http's text 404 page.
 	r.HandleFunc("/*", s.handleStaticMount)
 
 	// Envelope-consistent fallbacks (the catch-all above covers unknown paths;
@@ -107,10 +109,53 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
-// handleStaticMount is the UI slice's mount point (see Handler). No assets
-// exist in this slice yet.
+// webDir is the client root served at "/": index.html plus the CSS/JS modules.
+// The path is relative to the process working directory — main.go runs from
+// the repository root where "web/" lives (ui-spec U1; no embedding in v1).
+const webDir = "web"
+
+// staticFileServer is stateless and safe for concurrent use by every request.
+var staticFileServer http.Handler = http.FileServer(http.Dir(webDir))
+
+// staticMissRecorder lets a file-server miss (4xx: missing path, invalid path)
+// be intercepted before the client sees net/http's text 404 page, so the
+// response can be re-answered with the §11.1 JSON envelope. Sub-400 statuses
+// (file bodies, redirects) pass through untouched.
+type staticMissRecorder struct {
+	http.ResponseWriter
+	status int
+	missed bool
+}
+
+func (w *staticMissRecorder) WriteHeader(code int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = code
+	if code >= 400 {
+		w.missed = true // swallow the text page; the envelope replaces it
+		return
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *staticMissRecorder) Write(b []byte) (int, error) {
+	if w.missed {
+		return len(b), nil // drop "404 page not found" — nothing reached the client
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// handleStaticMount serves the web client from web/ rooted at "/" (see the
+// Handler comment). Missing files answer the standard not_found envelope so
+// unknown routes keep their §11.1 contract; a healthy serve is byte-identical
+// to a bare net/http file server.
 func (s *Server) handleStaticMount(rw http.ResponseWriter, r *http.Request) {
-	s.writeError(rw, r, app.NewAppError(app.ErrNotFound, "no such route", 404))
+	rec := &staticMissRecorder{ResponseWriter: rw}
+	staticFileServer.ServeHTTP(rec, r)
+	if rec.missed {
+		s.writeError(rw, r, app.NewAppError(app.ErrNotFound, "no such route", 404))
+	}
 }
 
 // ---------------------------------------------------------------------------
