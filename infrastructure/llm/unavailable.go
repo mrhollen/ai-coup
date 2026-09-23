@@ -7,12 +7,13 @@ import (
 	"forgejo.lan/mrhollen/ai-coup/application"
 )
 
-// UnavailableDriver is the build-level placeholder for LLM seats: the real
-// heuristic/openai drivers are not wired in this slice yet, so it reports
-// CanDriveLLM() == false. CreateGame then rejects any request containing LLM
-// seats at creation time with a clear message (fast fail), while human-only
-// games run end-to-end unaffected (§6.2). If Decide is ever reached anyway —
-// a wiring bug — it fails loudly instead of silently degrading to fallbacks.
+// UnavailableDriver is a build-level placeholder for LLM seats that reports
+// CanDriveLLM() == false (the real heuristic/openai drivers both claim the
+// capability; this stub remains for test compositions and builds that must
+// reject LLM seats fast). CreateGame then rejects any request containing LLM
+// seats at creation time with a clear message, while human-only games run
+// end-to-end unaffected (§6.2). If Decide is ever reached anyway — a wiring
+// bug — it fails loudly instead of silently degrading to fallbacks.
 type UnavailableDriver struct {
 	mode string // the COUP_DRIVER_MODE value ("heuristic" | "openai")
 }

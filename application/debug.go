@@ -41,10 +41,11 @@ type DebugSeat struct {
 	Driver   DebugDriver `json:"driver"`
 }
 
-// DebugDriver describes the driver backing one seat. ConversationMessages is a
-// placeholder (always 0 in this slice): per-seat conversation length becomes
-// real when the heuristic/openai drivers land (§6.4). InFlight reports a
-// decision currently being produced for the seat, if any.
+// DebugDriver describes the driver backing one seat. ConversationMessages
+// reports the driver's stored per-seat conversation length (§6.4) — real data
+// from drivers implementing ConversationReporter (the openai driver), 0 for
+// drivers that keep no conversations (heuristic, fake, unavailable).
+// InFlight reports a decision currently being produced for the seat, if any.
 type DebugDriver struct {
 	Mode                 string         `json:"mode"`
 	ConversationMessages int            `json:"conversation_messages"`
@@ -128,8 +129,12 @@ func (a *Application) DebugGame(gameID string) (*DebugState, error) {
 	}
 
 	mode := ""
+	var convReporter ConversationReporter
 	if a.deps.Driver != nil {
 		mode = a.deps.Driver.Name()
+		if cr, ok := a.deps.Driver.(ConversationReporter); ok {
+			convReporter = cr // §6.4 drivers report their stored conversation length
+		}
 	}
 	for i := range h.g.Seats {
 		s := &h.g.Seats[i]
@@ -141,7 +146,10 @@ func (a *Application) DebugGame(gameID string) (*DebugState, error) {
 			FaceDown: []string{},
 			FaceUp:   []string{},
 			Active:   s.Active(),
-			Driver:   DebugDriver{Mode: mode}, // ConversationMessages placeholder (this slice)
+			Driver:   DebugDriver{Mode: mode},
+		}
+		if convReporter != nil && s.Type == domain.SeatLLM {
+			ds.Driver.ConversationMessages = convReporter.ConversationMessages(h.id, s.ID)
 		}
 		for _, c := range s.FaceDown {
 			ds.FaceDown = append(ds.FaceDown, c.Character.String())

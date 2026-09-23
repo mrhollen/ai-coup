@@ -1,6 +1,7 @@
-// Package llm hosts the MoveDriver adapters (spec §2.1/§6.2). This slice ships
-// the scripted fake driver (tests only) and the unavailable stub that stands
-// in for the heuristic/openai drivers, which arrive in later slices.
+// Package llm hosts the MoveDriver adapters (spec §2.1/§6.2): the scripted
+// fake driver (tests only), the deterministic heuristic driver (A7, default
+// dev mode), the OpenAI-compatible tool-calling driver (§6.4), and the
+// unavailable stub for builds/compositions that must reject LLM seats fast.
 package llm
 
 import (

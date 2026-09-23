@@ -43,14 +43,23 @@ type MoveDriver interface {
 }
 
 // LLMCapable is an OPTIONAL marker implemented by MoveDrivers that can drive
-// LLM seats (spec §6.2): the fake driver (test compositions), and — once they
-// land — heuristic and openai. CreateGame rejects any request containing LLM
+// LLM seats (spec §6.2): the fake driver (test compositions), and the real
+// heuristic/openai drivers. CreateGame rejects any request containing LLM
 // seats when the configured driver does not claim this capability, so a build
-// whose LLM drivers are not wired yet (this slice's unavailable stub) fails
-// fast at creation with a clear message instead of stalling on the first LLM
-// turn. Human-only games are never affected by the check.
+// whose LLM drivers are not wired (the unavailable stub) fails fast at
+// creation with a clear message instead of stalling on the first LLM turn.
+// Human-only games are never affected by the check.
 type LLMCapable interface {
 	CanDriveLLM() bool
+}
+
+// ConversationReporter is an OPTIONAL extension implemented by drivers that
+// keep a stored per-seat conversation (spec §6.4: the openai driver; the
+// heuristic driver keeps none). The §11.2 debug dump reports the length so an
+// operator can see how much context each LLM seat has accumulated. Drivers
+// without this interface simply report 0.
+type ConversationReporter interface {
+	ConversationMessages(gameID, seatID string) int
 }
 
 // DecisionKind names what is being asked of a seat (spec §2.2).
