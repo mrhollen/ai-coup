@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coup — the table</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%23c9a227'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%2314100e'/%3E%3C/svg%3E">
+<!--
+  ai-coup web client — the production UI (docs/ui-spec.md is normative,
+  docs/mockup.html is the approved visual direction). Vanilla HTML/CSS/JS,
+  ES modules, no frameworks, no build step, no external assets. Served by the
+  Go server at / (same origin as the API; all calls are relative URLs).
+
+  Screen inventory (ui-spec §2):
+    #/          S1 lobby — new game + join
+    #/?join     S2 lobby — join card focused
+    #/g/{id}    S3 game view (+ S4 auth-error overlay)
+  The hash is a label only — every call authenticates via the bearer token
+  kept in sessionStorage per tab (ui-spec §2, U2).
+-->
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+
+<!-- ===== S3 topbar shell (hidden until a game view is entered) ===== -->
+<header class="topbar" id="topbar" hidden>
+  <span class="brand">Coup</span><span class="hairline"></span>
+  <button type="button" class="gchip" id="game-chip" title="Copy the full game id"></button>
+  <span class="spacer"></span>
+  <span class="conn" role="status" aria-live="polite">
+    <i class="dot" id="conn-dot" aria-hidden="true"></i>
+    <span class="visually-hidden" id="conn-text">live</span>
+    <span class="conn-label" id="conn-label" hidden>reconnecting…</span>
+  </span>
+  <button type="button" class="btn btn-ghost" id="forfeit-btn" title="The other human seats will be asked to vote">Forfeit vote</button>
+  <span class="viewer-chip"><span id="viewer-name"></span></span>
+</header>
+
+<!-- Passive banners (window you can't answer, open forfeit vote) — ui-spec §7.3/§10.1 -->
+<div class="banner-strip" id="banner-strip"></div>
+
+<!-- ===== S3 game view ===== -->
+<main class="game-layout" id="game-view" hidden>
+  <section class="col-left">
+    <div class="felt" id="felt" aria-label="The table">
+      <div class="seats" id="seats"></div>
+      <div class="center" id="center">
+        <span class="c-main" id="center-main"></span>
+        <span class="c-sub" id="center-sub"></span>
+        <span class="c-deck" id="center-deck"></span>
+      </div>
+    </div>
+    <!-- Turn-action console (ui-spec §5.4) — docked strip, not a modal -->
+    <div class="console" id="console" hidden></div>
+    <!-- Your hand strip (ui-spec §5.2: outside/below the felt) -->
+    <div class="hand-row" id="hand-row">
+      <span class="hand-cap">YOUR&nbsp;HAND</span>
+      <div class="hcards" id="hcards"></div>
+    </div>
+  </section>
+  <aside class="log" id="log-panel" role="log" aria-label="Table log">
+    <h2 class="log-head">
+      <span class="kicker">TABLE&nbsp;LOG</span>
+      <button type="button" class="follow-toggle" id="log-follow" aria-pressed="true">following</button>
+    </h2>
+    <div class="log-body" id="log-body"></div>
+    <button type="button" class="new-entries" id="new-entries" hidden>New entries ↓</button>
+  </aside>
+</main>
+
+<!-- ===== S1/S2 lobby (rendered by lobby.js) ===== -->
+<div class="lobby-wrap" id="lobby-root"></div>
+
+<!-- Modal root — window response, flip choice, exchange finish, ballots, tokens -->
+<div id="modal-root"></div>
+<!-- Game-over overlay lives above everything (ui-spec §10.6) -->
+<div id="overlay-root"></div>
+<!-- Toasts: bottom-center stack (ui-spec §4.7) -->
+<div class="toasts" id="toast-root"></div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
