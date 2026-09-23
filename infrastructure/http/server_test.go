@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -76,7 +77,7 @@ func TestAccessLog_StatusCodeAndFields(t *testing.T) {
 		Log: logger,
 	})
 	t.Cleanup(func() { a.Close() })
-	c := couphttp.NewServer(a, events, time.Second, false, "heuristic", logger)
+	c := couphttp.NewServer(a, events, time.Second, false, "heuristic", logger, os.DirFS("../../web"))
 	srv := httptest.NewServer(c.Handler())
 	t.Cleanup(srv.Close)
 

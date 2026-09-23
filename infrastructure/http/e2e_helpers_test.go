@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +60,9 @@ func newTestServer(t *testing.T, hold time.Duration, debug bool) *testServer {
 		Driver: llm.NewUnavailableDriver("heuristic"), // same stub as main.go in this slice
 		Log:    logger,
 	})
-	srv := couphttp.NewServer(a, events, hold, debug, "heuristic", logger)
+	// go test runs with CWD = this package dir, so the on-disk client root is
+	// ../../web (the embedded FS lives in package main and can't be imported).
+	srv := couphttp.NewServer(a, events, hold, debug, "heuristic", logger, os.DirFS("../../web"))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()

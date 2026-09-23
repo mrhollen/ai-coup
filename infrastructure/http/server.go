@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -32,7 +33,9 @@ const maxBodyBytes = 1 << 20
 // the use-case container; Events backs the unfiltered debug event history
 // (MemoryEventStore.All, §11); PollHold is the configured long-poll hold
 // (clamped per A1 at construction); Debug gates the /debug routes (A10);
-// DriverMode names the configured LLM driver for the debug config block (§1).
+// DriverMode names the configured LLM driver for the debug config block (§1);
+// WebRoot is the embedded client root served at "/" (ui-spec U1 — same origin
+// as the API, relative URLs only).
 type Server struct {
 	App        *app.Application
 	Events     *store.MemoryEventStore
@@ -40,11 +43,15 @@ type Server struct {
 	Debug      bool
 	DriverMode string
 	Log        *slog.Logger
+	WebRoot    fs.FS
+	web        http.Handler // http.FileServerFS over WebRoot (built once)
 }
 
 // NewServer builds the HTTP surface. The hold is clamped to [1s,30s] per A1
-// before use; a nil Log falls back to slog.Default().
-func NewServer(a *app.Application, events *store.MemoryEventStore, pollHold time.Duration, debug bool, driverMode string, log *slog.Logger) *Server {
+// before use; a nil Log falls back to slog.Default(). webRoot is the client
+// root served at "/" — production passes the go:embed copy from main (the
+// binary serves the UI from any working directory); tests pass their own.
+func NewServer(a *app.Application, events *store.MemoryEventStore, pollHold time.Duration, debug bool, driverMode string, log *slog.Logger, webRoot fs.FS) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -55,6 +62,8 @@ func NewServer(a *app.Application, events *store.MemoryEventStore, pollHold time
 		Debug:      debug,
 		DriverMode: driverMode,
 		Log:        log,
+		WebRoot:    webRoot,
+		web:        http.FileServerFS(webRoot),
 	}
 }
 
@@ -89,13 +98,14 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/debug/games/{id}", s.handleDebugGame)
 	}
 
-	// Static mount: the web client is served from the repo-root "web/"
-	// directory rooted at "/" (ui-spec U1 delivery model — same origin as the
-	// API, relative URLs only). The hash-routed SPA needs no path fallback:
-	// index.html lands at "/", assets under their own names, unknown paths
-	// 404. The handler keeps the §11.1 JSON envelope on misses (the established
-	// contract for unknown routes — asserted by the httptest suites) instead of
-	// net/http's text 404 page.
+	// Static mount: the web client is served from the EMBEDDED "web/" root
+	// (go:embed in main, passed in via NewServer.WebRoot) rooted at "/" — so
+	// the UI works from any process CWD, not just the repository root (ui-spec
+	// U1 delivery model — same origin as the API, relative URLs only). The
+	// hash-routed SPA needs no path fallback: index.html lands at "/", assets
+	// under their own names, unknown paths 404. The handler keeps the §11.1
+	// JSON envelope on misses (the established contract for unknown routes —
+	// asserted by the httptest suites) instead of net/http's text 404 page.
 	r.HandleFunc("/*", s.handleStaticMount)
 
 	// Envelope-consistent fallbacks (the catch-all above covers unknown paths;
@@ -108,14 +118,6 @@ func (s *Server) Handler() http.Handler {
 
 	return r
 }
-
-// webDir is the client root served at "/": index.html plus the CSS/JS modules.
-// The path is relative to the process working directory — main.go runs from
-// the repository root where "web/" lives (ui-spec U1; no embedding in v1).
-const webDir = "web"
-
-// staticFileServer is stateless and safe for concurrent use by every request.
-var staticFileServer http.Handler = http.FileServer(http.Dir(webDir))
 
 // staticMissRecorder lets a file-server miss (4xx: missing path, invalid path)
 // be intercepted before the client sees net/http's text 404 page, so the
@@ -146,13 +148,14 @@ func (w *staticMissRecorder) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// handleStaticMount serves the web client from web/ rooted at "/" (see the
+// handleStaticMount serves the embedded web client rooted at "/" (see the
 // Handler comment). Missing files answer the standard not_found envelope so
 // unknown routes keep their §11.1 contract; a healthy serve is byte-identical
-// to a bare net/http file server.
+// to a bare net/http file server. s.web is one FileServerFS over the embedded
+// FS — stateless and safe for concurrent use by every request.
 func (s *Server) handleStaticMount(rw http.ResponseWriter, r *http.Request) {
 	rec := &staticMissRecorder{ResponseWriter: rw}
-	staticFileServer.ServeHTTP(rec, r)
+	s.web.ServeHTTP(rec, r)
 	if rec.missed {
 		s.writeError(rw, r, app.NewAppError(app.ErrNotFound, "no such route", 404))
 	}

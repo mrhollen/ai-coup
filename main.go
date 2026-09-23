@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -202,7 +203,12 @@ func main() {
 		Driver: driver,
 		Log:    log,
 	}) // default Rng + TokenSource (crypto-random) are fine for production use
-	server := httpserver.NewServer(a, events, cfg.PollHold, cfg.Debug, cfg.DriverMode, log)
+	webRoot, err := fs.Sub(webFS, "web") // embedded client root — CWD-independent (ui-spec U1)
+	if err != nil {
+		log.Error("embedded_web_root_failed", "err", err)
+		os.Exit(2)
+	}
+	server := httpserver.NewServer(a, events, cfg.PollHold, cfg.Debug, cfg.DriverMode, log, webRoot)
 
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
