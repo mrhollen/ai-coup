@@ -78,3 +78,19 @@ func (a *Application) pollResult(gameID string, evts []EventOut) (*PollResult, e
 	}
 	return &PollResult{GameID: gameID, Events: evts, LastSeq: lastSeq}, nil
 }
+
+// WaitForEvent blocks until some event with seq > after is appended for the
+// game, or ctx is done — whichever comes first. It is the unbounded wait
+// primitive behind PollEvents, exposed for SCRIPTED/UNATTENDED clients (the
+// A13 stress-suite auto client of spec §14.3): unlike PollEvents there is no
+// artificial hold, so a scripted player reacts exactly when the table changes
+// instead of on a 1-30s polling cadence. The check-then-register inside the
+// store is atomic, so a wake-up can never be missed. Unknown games are an
+// immediate 404 AppError; a cancelled ctx simply returns.
+func (a *Application) WaitForEvent(ctx context.Context, gameID string, after int64) error {
+	if _, err := a.game(gameID); err != nil {
+		return err
+	}
+	a.deps.Events.WaitNew(ctx, gameID, after)
+	return nil
+}
