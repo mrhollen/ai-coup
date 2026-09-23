@@ -12,10 +12,10 @@ import (
 // machine-readable wire code a handler puts in the JSON body, and Status the
 // HTTP status to answer with.
 const (
-	ErrUnauthorized  = "unauthorized"
-	ErrNotFound      = "not_found"
-	ErrInvalidInput  = "invalid_payload"
-	ErrServer        = "server_error"
+	ErrUnauthorized = "unauthorized"
+	ErrNotFound     = "not_found"
+	ErrInvalidInput = "invalid_payload"
+	ErrServer       = "server_error"
 )
 
 // AppError is the typed error every use case returns for client-facing
@@ -50,15 +50,16 @@ var wireMap = map[string]struct {
 	code   string
 	status int
 }{
-	domain.CodeWindowResolved:    {"already_resolved", 409}, // A16 stale window id / closed window
-	domain.CodeDecisionMade:      {"already_resolved", 409}, // answered or gone single-seat decision
-	domain.CodeVoteExists:        {"already_resolved", 409}, // one active vote per game (A15)
-	domain.CodeAlreadyVoted:      {"already_resolved", 409}, // second ballot from the same voter
-	domain.CodeVoteResolved:      {"vote_closed", 409},     // no live ballot to cast on (§7/§11.2)
-	domain.CodeNoSuchSeat:        {ErrNotFound, 404},       // unknown seat id in a request
-	domain.CodeInvalidChoice:     {ErrInvalidInput, 400},   // choice value not in the option set
-	domain.CodeMissingClaim:      {ErrInvalidInput, 400},   // payload lacks a required claim
-	domain.CodeInvalidClaim:      {ErrInvalidInput, 400},   // payload names a wrong claim character
+	domain.CodeWindowResolved:   {"already_resolved", 409}, // A16 stale window id / closed window
+	domain.CodeAlreadyResponded: {"already_resolved", 409}, // A16 second response while the window is still open
+	domain.CodeDecisionMade:     {"already_resolved", 409}, // answered or gone single-seat decision
+	domain.CodeVoteExists:       {"already_resolved", 409}, // one active vote per game (A15)
+	domain.CodeAlreadyVoted:     {"already_resolved", 409}, // second ballot from the same voter
+	domain.CodeVoteResolved:     {"vote_closed", 409},      // no live ballot to cast on (§7/§11.2)
+	domain.CodeNoSuchSeat:       {ErrNotFound, 404},        // unknown seat id in a request
+	domain.CodeInvalidChoice:    {ErrInvalidInput, 400},    // choice value not in the option set
+	domain.CodeMissingClaim:     {ErrInvalidInput, 400},    // payload lacks a required claim
+	domain.CodeInvalidClaim:     {ErrInvalidInput, 400},    // payload names a wrong claim character
 }
 
 // FromDomain converts an engine error into the wire representation. Domain

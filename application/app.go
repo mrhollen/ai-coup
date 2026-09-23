@@ -46,13 +46,13 @@ func ClampPollHold(d time.Duration) time.Duration {
 // Rng is seeded from the wall clock, a nil TokenSource draws 32 crypto-random
 // bytes.
 type Dependencies struct {
-	Events  EventStore
-	Games   GameStore
-	Clock   Clock
-	IDs     IDGen
-	Driver  MoveDriver
-	Log     *slog.Logger        // optional; see above
-	Rng     *rand.Rand          // optional; deck shuffle + random start seat (rules.md Ruling 6)
+	Events      EventStore
+	Games       GameStore
+	Clock       Clock
+	IDs         IDGen
+	Driver      MoveDriver
+	Log         *slog.Logger           // optional; see above
+	Rng         *rand.Rand             // optional; deck shuffle + random start seat (rules.md Ruling 6)
 	TokenSource func() (string, error) // optional; human bearer tokens (A2)
 }
 
@@ -142,13 +142,13 @@ func (a *Application) ResolveToken(token string) (gameID, seatID string, ok bool
 // and bookkeeping happens under it, and no blocked driver call ever runs while
 // holding it.
 type gameHandle struct {
-	app    *Application
-	id     string
-	g      *domain.Game // same pointer the GameStore holds
-	mu     sync.Mutex   // per-game serialization lock
+	app *Application
+	id  string
+	g   *domain.Game // same pointer the GameStore holds
+	mu  sync.Mutex   // per-game serialization lock
 
-	tokens   map[string]string // seatID → bearer token (humans only, A2)
-	inFlight map[string]*flight // one in-flight LLM decision per seat (§9)
+	tokens   map[string]string          // bearer token → seatID (humans only, A2)
+	inFlight map[string]*flight         // one in-flight LLM decision per seat (§9)
 	done     map[string]map[string]bool // structureID → seats already dispatched
 	meta     *structureMeta             // the currently open window/decision
 }
@@ -170,7 +170,7 @@ type structureMeta struct {
 	kind      string // "window" | "decision"
 	openedAt  time.Time
 	timeoutMs int
-	trigger   string // public summary of what opened the structure
+	trigger   string        // public summary of what opened the structure
 	stop      chan struct{} // closed when the structure no longer exists
 }
 
@@ -201,6 +201,9 @@ func (h *gameHandle) run(fn func(*domain.Game) ([]domain.Event, error)) (int64, 
 	defer h.mu.Unlock()
 	evs, err := fn(h.g)
 	if err != nil {
+		if ae, ok := AsAppError(err); ok { // payload-level rejections keep their wire code/status
+			return 0, ae
+		}
 		return 0, FromDomain(err)
 	}
 	if len(evs) == 0 {
