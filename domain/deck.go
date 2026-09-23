@@ -26,6 +26,17 @@ func NewCourtDeck(cards []Card, rng *rand.Rand) *CourtDeck {
 // Size returns the number of cards in the Court Deck.
 func (d *CourtDeck) Size() int { return len(d.order) }
 
+// Cards returns the current deck composition, top first (index 0 is the top).
+// This is read-only access for the debug surface only (§11 GET /debug: "actual
+// deck composition … for debugging"); the engine itself uses DrawTop and
+// ReturnShuffled exclusively. The copy means the caller can never mutate the
+// deck through it, so no invariant or lock discipline changes.
+func (d *CourtDeck) Cards() []Card {
+	cards := make([]Card, len(d.order))
+	copy(cards, d.order)
+	return cards
+}
+
 // DrawTop removes and returns the top n cards, in draw order. Callers rely on
 // the size invariant; drawing more than is present is a caller bug.
 func (d *CourtDeck) DrawTop(n int) []Card {
