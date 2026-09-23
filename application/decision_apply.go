@@ -24,6 +24,7 @@ func (h *gameHandle) runDecision(f *flight, in DecisionInput) {
 		if cur, ok := h.inFlight[f.seatID]; ok && cur == f {
 			delete(h.inFlight, f.seatID)
 		}
+		h.redispatchIfOwedLocked(h.g, f.seatID)
 		h.mu.Unlock()
 	}()
 

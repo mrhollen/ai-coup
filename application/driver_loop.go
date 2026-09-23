@@ -260,8 +260,8 @@ func (h *gameHandle) driverForSeat(g *domain.Game, seatID string) (string, bool)
 }
 
 func payloadString(m map[string]any, k string) string { s, _ := m[k].(string); return s }
-func payloadBool(m map[string]any, k string) bool      { b, _ := m[k].(bool); return b }
-func payloadInt(m map[string]any, k string) int        { i, _ := m[k].(int); return i }
+func payloadBool(m map[string]any, k string) bool     { b, _ := m[k].(bool); return b }
+func payloadInt(m map[string]any, k string) int       { i, _ := m[k].(int); return i }
 
 func payloadSlice(m map[string]any, k string) []string {
 	out := []string{}
@@ -345,16 +345,21 @@ func (h *gameHandle) reconcileStructureLocked(g *domain.Game, evs []domain.Event
 }
 
 // startStructureWatches spawns the timeout timer (when the structure honors a
-// timeout) and the A11 still-waiting heartbeat for an open structure.
+// timeout) and the A11 still-waiting heartbeat for an open structure. The
+// Clock.After channels are armed synchronously here — under the game lock,
+// before any batch caller can release it — so a deadline registered for this
+// structure can never lose a race against an Advance made immediately after
+// the batch commits; only the wait-and-act happens in goroutines.
 func (h *gameHandle) startStructureWatches(m *structureMeta) {
 	stop := m.stop
+	var tick <-chan time.Time
 	if m.timeoutMs > 0 {
-		d := time.Duration(m.timeoutMs) * time.Millisecond
+		tick = h.app.deps.Clock.After(time.Duration(m.timeoutMs) * time.Millisecond)
 		go func() {
 			select {
 			case <-stop:
 				return
-			case <-h.app.deps.Clock.After(d):
+			case <-tick:
 			}
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -372,11 +377,12 @@ func (h *gameHandle) startStructureWatches(m *structureMeta) {
 		}()
 	}
 	go func() {
+		tick := h.app.deps.Clock.After(heartbeatInterval)
 		for {
 			select {
 			case <-stop:
 				return
-			case <-h.app.deps.Clock.After(heartbeatInterval):
+			case <-tick:
 			}
 			h.mu.Lock()
 			if h.meta == nil || h.meta.id != m.id {
@@ -402,6 +408,7 @@ func (h *gameHandle) startStructureWatches(m *structureMeta) {
 			elapsed := h.app.deps.Clock.Now().Sub(m.openedAt)
 			h.mu.Unlock()
 			h.app.log.Info("still_waiting", []any{"game_id", h.id, "turn_id", turnID, "structure", m.kind, "id", m.id, "unresponded", unresponded, "elapsed_ms", elapsed.Milliseconds()}...)
+			tick = h.app.deps.Clock.After(heartbeatInterval) // re-arm the next cycle
 		}
 	}()
 }
@@ -513,14 +520,66 @@ func (h *gameHandle) dispatchLocked(g *domain.Game, seatID string, kind Decision
 	h.inFlight[seatID] = f
 	h.markDone(structID, seatID)
 	in := DecisionInput{
-		GameID:   h.id,
-		SeatID:   seatID,
-		Kind:     kind,
-		World:    h.worldView(g, seatID, tail),
-		Request:  req,
+		GameID:  h.id,
+		SeatID:  seatID,
+		Kind:    kind,
+		World:   h.worldView(g, seatID, tail),
+		Request: req,
 	}
 	h.app.log.Debug("llm_dispatch", []any{"game_id", h.id, "player_id", seatID, "kind", kind.String(), "structure", structID}...)
 	go h.runDecision(f, in)
+}
+
+// redispatchIfOwedLocked re-checks, after a flight released its per-seat slot,
+// whether that seat owes a decision for the structure now open (spec §9: at
+// most one concurrent Decide per seat). A turn or response that became owed
+// WHILE a dying (just-cancelled) flight still held the slot would otherwise be
+// lost: drivePendingLocked skips seats with an occupied slot and nothing else
+// re-examines them. The caller holds h.mu; dispatch marks the structure done
+// before launching, so this can never loop on the same structure.
+func (h *gameHandle) redispatchIfOwedLocked(g *domain.Game, seatID string) {
+	if g.Status == domain.Finished || h.inFlight[seatID] != nil {
+		return
+	}
+	switch g.Phase() {
+	case domain.PhaseTurnAction:
+		seat := &g.Seats[g.TurnSeatIndex]
+		if seat.ID != seatID || seat.Type != domain.SeatLLM {
+			return
+		}
+		structID := "turn:" + strconv.Itoa(g.TurnID)
+		if !h.isDone(structID, seatID) {
+			h.dispatchLocked(g, seatID, KindTurnAction, Request{}, structID)
+		}
+	case domain.PhaseWindowOpen:
+		wv := g.WindowView()
+		if wv == nil {
+			return
+		}
+		var owed bool
+		for _, id := range wv.Eligible {
+			if id == seatID {
+				owed = true
+				break
+			}
+		}
+		if !owed || h.isDone(wv.ID, seatID) {
+			return
+		}
+		trigger := ""
+		if h.meta != nil && h.meta.id == wv.ID {
+			trigger = h.meta.trigger
+		}
+		req := Request{WindowID: wv.ID, TriggerSummary: trigger, EligibleActions: g.AllowedResponsesFor(seatID)}
+		h.dispatchLocked(g, seatID, KindWindowResponse, req, wv.ID)
+	case domain.PhaseSingleSeatDecision:
+		dv := g.DecisionView()
+		if dv == nil || dv.SeatID != seatID || h.isDone(dv.ID, seatID) {
+			return
+		}
+		req := Request{ChoiceKind: dv.Kind.String(), Options: choiceOptions(dv)}
+		h.dispatchLocked(g, seatID, KindSingleSeatChoice, req, dv.ID)
+	}
 }
 
 // worldView builds exactly what the seat may know (§8): its own hand and
