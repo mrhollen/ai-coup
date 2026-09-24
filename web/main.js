@@ -149,7 +149,7 @@ async function enterGame(gameId) {
   // Step 3 — a finished game renders final + overlay and never polls (§7.1).
   if (state.status !== "in_progress") {
     fullRender();
-    showGameOver(state);
+    guarded("game-over overlay", () => showGameOver(state));
     return;
   }
 
@@ -184,8 +184,8 @@ async function enterGame(gameId) {
 
   // Step 6 — render once; open any decision surface implied by current.phase.
   fullRender();
-  if (state.justCreated) showTokenNotice(state); // §6.3 over the first paint
-  ensureSurfaces(state);
+  guarded("token notice", () => { if (state.justCreated) showTokenNotice(state); }); // §6.3 over the first paint
+  guarded("decision surfaces", () => ensureSurfaces(state));
 }
 
 /**
@@ -232,11 +232,11 @@ function applyEvents(events, opts) {
   // A window_closed in this batch transitions an open response modal to its
   // closed/stale-adjacent state (§7.5 layer 3, §8.1 S3).
   if (closedInBatch) {
-    transitionWindowModalOnClose(state, closedInBatch.window_id);
+    guarded("window modal close transition", () => transitionWindowModalOnClose(state, closedInBatch.window_id));
   }
 
   fullRender();
-  ensureSurfaces(state);
+  guarded("decision surfaces", () => ensureSurfaces(state));
 
   // A submitted decision that was settled by this batch but whose state slot was
   // already cleared by a same-batch turn_start (e.g. coup → flip → next turn in
@@ -246,7 +246,7 @@ function applyEvents(events, opts) {
   // settled decision object still has to close its modal (§9.2). The copy picks
   // between "card is face-up" and "the table chose for you" via d.settled.
   if (decBefore && decBefore.settled && state.decision !== decBefore) {
-    settleDecisionModal(state, decBefore);
+    guarded("decision modal settlement", () => settleDecisionModal(state, decBefore));
   }
 
   // Spectator toast — once, when the viewer's own seat is eliminated (§11).
@@ -256,21 +256,33 @@ function applyEvents(events, opts) {
   }
 
   // Terminal: the overlay must appear even though polling continues harmlessly.
-  if (state.status !== "in_progress") showGameOver(state);
+  if (state.status !== "in_progress") guarded("game-over overlay", () => showGameOver(state));
 }
 
 // ---------------------------------------------------------------------------
 // Full re-render of every state-driven region (renderers are pure over state).
 // ---------------------------------------------------------------------------
 
+/**
+ * Render-layer guard: a throwing renderer or surface handler must log to the
+ * console and leave the rest of the table usable — never silently abort the
+ * bootstrap, the batch applier, or the poll loop behind it. State is untouched;
+ * the next tick (poll batch / 250ms ticker) retries the same work.
+ */
+function guarded(label, fn) {
+  try { fn(); } catch (e) { console.error(`coup: ${label} failed — state kept, will retry`, e); }
+}
+
 function fullRender() {
   if (!state) return;
-  renderTable(state, el.felt, el.seats, el.center);
-  renderHand(state, el.handRow, el.hcards);
-  renderConsole(state, el.console, (body) => submitConsoleAction(state, body));
-  renderTopbar(state, { gameChipEl: el.gameChip, viewerEl: el.viewerName, forfeitBtnEl: el.forfeitBtn });
-  updateConn(state, el);
-  renderBanners(state, el.bannerStrip, isBallotModalOpen());
+  guarded("full render pass", () => {
+    renderTable(state, el.felt, el.seats, el.center);
+    renderHand(state, el.handRow, el.hcards);
+    renderConsole(state, el.console, (body) => submitConsoleAction(state, body));
+    renderTopbar(state, { gameChipEl: el.gameChip, viewerEl: el.viewerName, forfeitBtnEl: el.forfeitBtn });
+    updateConn(state, el);
+    renderBanners(state, el.bannerStrip, isBallotModalOpen());
+  });
 }
 
 let topbarWired = false;
@@ -311,7 +323,10 @@ setLobbyHooks({
 });
 
 setDecideHooks({
-  refresh: () => { if (state) fullRender(); },
+  // Surface-aware refresh: repaint the table AND re-run surface detection.
+  // The token notice's close button relies on this to surface a window/decision
+  // modal that was waiting behind it (§6.3).
+  refresh: () => { if (state) { fullRender(); guarded("decision surfaces", () => ensureSurfaces(state)); } },
   resnapshot: recoveryResnapshot,
 });
 
