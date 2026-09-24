@@ -106,7 +106,15 @@ export function startPolling(state, hooks) {
         }
         const evts = res.events || [];
         if (evts.length > 0) {
-          hooks.onBatch(evts); // apply-then-repoll (§7.2)
+          try {
+            hooks.onBatch(evts); // apply-then-repoll (§7.2)
+          } catch (e) {
+            // A render/surface error in the batch handler must never kill the
+            // single-flight loop: log it loudly and keep polling (the next
+            // resnapshot or batch will repaint). Silently dying here is what
+            // makes a broken table look "empty but alive".
+            console.error("coup: event batch failed to apply — poll loop continues", e);
+          }
         }
         continue; // immediately issue the next poll
       } catch (err) {
