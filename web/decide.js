@@ -107,6 +107,7 @@ const ui = {
   dec: null,        // flip/exchange modal handle keyed by decision id
   ballot: null,     // {h, voteId, voted, closedByEsc, lastCastSeen}
   tokenShown: false,
+  tokenModal: null, // open shell handle of the one-time token notice (null when closed)
   gameOverShown: false,
   heldWindowId: null,   // response modal held (✕/Esc) for this window (§8.1)
   reopenPill: null,     // docked pill element
@@ -152,7 +153,9 @@ function openWindowModal(state) {
     <div class="m-body"><div class="chips" id="win-chips"></div></div>
     <div class="m-set" id="win-set"></div>
     <div class="m-foot" id="win-foot"></div>`;
-  h.panel.querySelector(".m-title").innerHTML = esc(titleText); // verbatim (U9) — names stay as the server wrote them
+  const titleEl = h.panel.querySelector("#win-title");
+  if (titleEl) titleEl.textContent = titleText; // verbatim (U9) — textContent: the copy is the server's, no markup to decode
+  else console.error("coup: window modal lost its title node", { titleText });
   h.panel.querySelector(".m-close").addEventListener("click", () => holdWindowModal(state));
 
   ui.win = { h, windowId: w.id, mode: w.iResponded ? "locked" : "deciding", respondedAt: Date.now(), timer: null,
@@ -320,7 +323,7 @@ function syncReopenPill(state) {
     const el = document.createElement("div");
     el.className = "reopen-pill";
     el.innerHTML = `<button type="button" class="btn btn-outline">Respond — a window is open</button>`;
-    el.querySelector("button").addEventListener("click", () => { removeReopenPill(); refresh(); });
+    el.querySelector("button").addEventListener("click", () => { ui.heldWindowId = null; removeReopenPill(); refresh(); }); // explicit reopen lifts the hold
     felt.appendChild(el);
     ui.reopenPill = el;
   } else if (!should && ui.reopenPill) {
@@ -613,7 +616,7 @@ function openBallot(state, isNewCast) {
 
   const target = seatById(state, v.targetSeatId);
   const init = seatById(state, v.initiatorSeatId);
-  const h = openShell({ labelledBy: "vote-title", onEsc: () => closeBallot() }); // §15: Esc closes without voting
+  const h = openShell({ labelledBy: "vote-title", onEsc: () => closeBallot(state) }); // §15: Esc closes without voting
   h.panel.innerHTML = `
     <div class="m-head">
       <span class="modal-kicker">THE TABLE ASKS</span>
@@ -631,11 +634,13 @@ function openBallot(state, isNewCast) {
 
 function castCount(v) { return Object.keys(v.votes || {}).length; }
 
-function closeBallot() {
-  if (!ui.ballot) return;
-  ui.ballot.closedByEsc = true; // the passive banner takes over (§10.1); reopens on new casts
-  ui.ballot.h.close();
-  ui.ballot = null;
+function closeBallot(state) {
+  const m = ui.ballot;
+  if (!m || !m.open) return;
+  m.closedByEsc = true; // the passive banner takes over (§10.1)
+  m.lastCastSeen = castCount(state.vote); // keep the record: Esc must not auto-reopen
+  // (no new casts since) — a genuinely NEW cast still reopens it (§10.1).
+  m.h.close();
   refresh();
 }
 
@@ -809,12 +814,17 @@ export function showTokenNotice(state) {
       <p class="modal-sub">Closing this tab loses nothing — rejoin any time with your game id and token.</p>
     </div>
     <div class="m-foot"><button type="button" class="btn btn-primary" id="tok-deal" style="flex:1">Deal me in</button></div>`;
+  ui.tokenModal = h; // decision surfaces yield to the notice until it is closed (§6.3)
   h.panel.querySelector("#tok-text").textContent = state.token || "";
   h.panel.querySelector("#tok-copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(state.token || ""); infoToast("token copied"); }
     catch { infoToast("copy failed — select the text manually"); }
   });
-  h.panel.querySelector("#tok-deal").addEventListener("click", () => h.close());
+  h.panel.querySelector("#tok-deal").addEventListener("click", () => {
+    ui.tokenModal = null;
+    h.close();
+    if (refresh) refresh(); // re-run surface detection now that the notice is gone
+  });
   h.focusInitial("#tok-deal"); // §15 initial focus
 }
 
@@ -864,11 +874,18 @@ export async function handleDecisionRejection(state, e, { staleNotice = null } =
 export function ensureSurfaces(state) {
   if (state.status !== "in_progress") { showGameOverIfFinished(state); return; }
 
-  // §8 window response modal (+ reopen pill).
+  // §6.3: the one-time token notice outranks every decision surface — it is the
+  // ONLY chance to keep the seat's token, and openShell() would otherwise close
+  // it when a window modal lands on the same tick. Surfaces re-run when the
+  // notice's "Deal me in" closes it (refresh).
+  if (ui.tokenModal && ui.tokenModal.open) return;
+
+  // §8 window response modal (+ reopen pill). A held window (✕/Esc) does NOT
+  // auto-reopen — the docked pill is the explicit affordance (§8.1).
   const w = state.window;
   if (w && w.eligible.includes(state.mySeatId)) {
-    if (!ui.win || !ui.win.open) openWindowModal(state);
-    else updateWindowModal(state);
+    if ((!ui.win || !ui.win.open) && ui.heldWindowId !== w.id) openWindowModal(state);
+    else if (ui.win && ui.win.open) updateWindowModal(state);
   } else if (ui.win && ui.win.open) {
     // Window gone or I'm not eligible: close it out per the §7.5/§8.1 states.
     transitionWindowModalOnClose(state, w ? null : ui.win.windowId);
@@ -881,12 +898,14 @@ export function ensureSurfaces(state) {
   if (d && d.seatId === state.mySeatId && !d.settled) openDecisionModal(state);
   if (d && d.seatId === state.mySeatId && d.settled) settleDecisionModal(state, d);
 
-  // §10 ballot modal.
+  // §10 ballot modal. First sight opens it; after an Esc-close the record's
+  // lastCastSeen gates reopens to genuinely NEW casts (§10.1).
   const v = state.vote;
   if (v && !v.result && v.eligibleVoters.includes(state.mySeatId)) {
-    const newCast = castCount(v) > (ui.ballot ? ui.ballot.lastCastSeen : -1);
-    if (!isBallotModalOpen() || newCast) openBallot(state, newCast); // reopens on any new cast (§10.1)
-    else updateBallot(state);
+    const known = !!(ui.ballot && ui.ballot.voteId === v.id);
+    const newCast = castCount(v) > (known ? ui.ballot.lastCastSeen : -1);
+    if (!known || newCast) openBallot(state, newCast);
+    else if (isBallotModalOpen()) updateBallot(state);
   } else if (v && v.result && isBallotModalOpen()) {
     updateBallot(state); // arms the 4s auto-close in its resolved state
   }
@@ -913,9 +932,14 @@ export function startTickers(stateRef, onTick) {
   const t = setInterval(() => {
     const s = stateRef();
     if (!s || document.hidden) return;
-    if (ui.win && ui.win.open) updateWindowModal(s);
-    if (ui.dec && ui.dec.open) decisionCountdown(s, s.decision || { deadlineAt: null });
-    if (onTick) onTick();
+    try {
+      if (ui.win && ui.win.open) updateWindowModal(s);
+      if (ui.dec && ui.dec.open) decisionCountdown(s, s.decision || { deadlineAt: null });
+      if (onTick) onTick();
+    } catch (e) {
+      // A tick must never kill the interval — log and keep counting down.
+      console.error("coup: countdown ticker tick failed", e);
+    }
   }, 250);
   return () => clearInterval(t);
 }
