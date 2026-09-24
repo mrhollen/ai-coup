@@ -35,3 +35,6 @@ go.work.sum
 
 # transient tooling probe
 .write_probe
+
+# screenshot scratch (bug-hunt evidence, not part of the client)
+.scratch/
