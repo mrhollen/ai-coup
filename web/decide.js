@@ -8,7 +8,7 @@
 
 import { cap, esc, seatById } from "./state.js";
 import { apiGet, apiPost, ApiError, kickerForCode } from "./poll.js";
-import { chipHtml, renderName, charColor, consoleActBody, consoleUi } from "./render.js";
+import { chipHtml, renderName, charColor, charMonogram, consoleActBody, consoleUi } from "./render.js";
 
 let refresh = () => {};        // set by main.js — full table re-render
 let resnapshotFn = null;       // set by main.js — recovery resnapshot (§7.4)
@@ -118,12 +118,12 @@ const ui = {
 // ===========================================================================
 
 const RESP_BUTTONS = {
-  pass:                    { label: "Pass",                 cls: "btn-outline", post: () => ({ response: { type: "pass" } }) },
-  challenge:               { label: "Challenge",            cls: "btn-danger",  post: () => ({ response: { type: "challenge" } }) },
-  counterclaim_contessa:   { label: "Block — I'm Contessa", cls: "btn-primary", post: () => ({ response: { type: "counterclaim", character: "contessa" } }) },
-  counterclaim_captain:    { label: "Block — I'm Captain",  cls: "btn-primary", post: () => ({ response: { type: "counterclaim", character: "captain" } }) },
-  counterclaim_ambassador: { label: "Block — I'm Ambassador", cls: "btn-primary", post: () => ({ response: { type: "counterclaim", character: "ambassador" } }) },
-  counterclaim_duke:       { label: "Block — I'm Duke",     cls: "btn-primary", post: () => ({ response: { type: "counterclaim", character: "duke" } }) },
+  pass:                    { label: "Pass",                   cls: "btn-resp-pass",       icon: "✕", post: () => ({ response: { type: "pass" } }) },
+  challenge:               { label: "Challenge",              cls: "btn-resp-challenge",  icon: "⚔️", post: () => ({ response: { type: "challenge" } }) },
+  counterclaim_contessa:   { label: "Block as Contessa",      cls: "btn-resp-contessa",   icon: "🛡️", post: () => ({ response: { type: "counterclaim", character: "contessa" } }) },
+  counterclaim_captain:    { label: "Block as Captain",       cls: "btn-resp-captain",    icon: "🛡️", post: () => ({ response: { type: "counterclaim", character: "captain" } }) },
+  counterclaim_ambassador: { label: "Block as Ambassador",    cls: "btn-resp-ambassador", icon: "🛡️", post: () => ({ response: { type: "counterclaim", character: "ambassador" } }) },
+  counterclaim_duke:       { label: "Block as Duke",          cls: "btn-resp-duke",       icon: "🛡️", post: () => ({ response: { type: "counterclaim", character: "duke" } }) },
 };
 
 // §8.1 button order left→right: blocks (listed order), Challenge, Pass.
@@ -132,10 +132,46 @@ const RESP_ORDER = ["counterclaim_contessa", "counterclaim_captain", "countercla
 function openWindowModal(state) {
   const w = state.window;
   if (!w || !w.eligible.includes(state.mySeatId)) return;
+  // An actor can NEVER challenge or vote on their own declared turn action
+  if (w.kind === "challenge" && w.actorId === state.mySeatId) return;
+  // A blocker can NEVER challenge their own counterclaim block
+  if (w.kind === "counterclaim_challenge" && w.blockerId === state.mySeatId) return;
   if (ui.win && ui.win.windowId === w.id && ui.win.open) { updateWindowModal(state); return; }
 
-  const isTarget = !!w.targetSeatId && w.targetSeatId === state.mySeatId;
-  const titleText = w.triggerText || windowTitleFallback(state, w);
+  const isBlock = w.kind === "counterclaim_challenge";
+  const isTarget = !isBlock && !!w.targetSeatId && w.targetSeatId === state.mySeatId;
+  const isActorOfBlockedAction = isBlock && w.actorId === state.mySeatId;
+
+  let kicker = "THE WINDOW";
+  let titleText = "";
+  let subText = "";
+
+  if (isBlock) {
+    const blocker = seatById(state, w.blockerId);
+    const bName = blocker ? blocker.name : "An opponent";
+    const charName = w.blockChar ? cap(w.blockChar) : "a character";
+    kicker = isActorOfBlockedAction ? "🛡️ YOUR ACTION IS BEING BLOCKED" : "🛡️ OPPONENT BLOCK CLAIM";
+    titleText = isActorOfBlockedAction
+      ? `${bName} claims ${charName} to block your action!`
+      : `${bName} claims ${charName} to block the action`;
+    subText = isActorOfBlockedAction
+      ? `If you believe ${bName} is bluffing, you can CHALLENGE their claim. If you accept the block (Pass), your action fizzles.`
+      : `Any active player may challenge ${bName}'s block claim, or allow it to stand.`;
+  } else if (isTarget) {
+    const attacker = seatById(state, w.actorId);
+    const aName = attacker ? attacker.name : "An opponent";
+    const act = w.triggerActionSeq ? state.actionsBySeq[w.triggerActionSeq] : null;
+    kicker = "🚨 YOU ARE BEING TARGETED!";
+    titleText = `${aName} is targeting YOU with ${cap(act?.type || "an attack")}!`;
+    subText = "Choose your response: defend with an allowed character, challenge their claim if you suspect a bluff, or pass.";
+  } else {
+    const actor = seatById(state, w.actorId);
+    const aName = actor ? actor.name : "An opponent";
+    kicker = "⚡ OPPONENT CLAIM";
+    titleText = w.triggerText || windowTitleFallback(state, w);
+    subText = `Do you want to challenge ${aName}'s claim or allow the action to proceed?`;
+  }
+
   const h = openShell({
     wide: true,
     closable: true,
@@ -145,17 +181,26 @@ function openWindowModal(state) {
   });
   h.panel.innerHTML = `
     <div class="m-head">
-      <span class="modal-kicker">THE WINDOW</span>
+      <span class="modal-kicker">${kicker}</span>
       <button type="button" class="m-close" aria-label="Hold — close without responding">×</button>
       <h2 class="modal-title" id="win-title"></h2>
-      ${isTarget ? `<p class="modal-sub">You are the target.</p>` : ""}
+      <p class="modal-sub" id="win-desc" style="margin:6px 0 0;font-size:13px;color:var(--ink-mid);line-height:1.45"></p>
+      ${isTarget ? `
+        <div class="target-warning-banner" role="alert">
+          <span class="target-warning-icon">⚠️</span>
+          <div class="target-warning-body">
+            <div class="target-warning-title">YOU ARE THE TARGET!</div>
+            <div class="target-warning-desc">This action directly attacks your influence. Choose your response carefully: pass, challenge, or block with an allowed character!</div>
+          </div>
+        </div>` : ""}
     </div>
     <div class="m-body"><div class="chips" id="win-chips"></div></div>
     <div class="m-set" id="win-set"></div>
     <div class="m-foot" id="win-foot"></div>`;
   const titleEl = h.panel.querySelector("#win-title");
-  if (titleEl) titleEl.textContent = titleText; // verbatim (U9) — textContent: the copy is the server's, no markup to decode
-  else console.error("coup: window modal lost its title node", { titleText });
+  if (titleEl) titleEl.textContent = titleText;
+  const descEl = h.panel.querySelector("#win-desc");
+  if (descEl) descEl.textContent = subText;
   h.panel.querySelector(".m-close").addEventListener("click", () => holdWindowModal(state));
 
   ui.win = { h, windowId: w.id, mode: w.iResponded ? "locked" : "deciding", respondedAt: Date.now(), timer: null,
@@ -166,8 +211,8 @@ function openWindowModal(state) {
 
 function windowTitleFallback(state, w) {
   const a = w.triggerActionSeq ? state.actionsBySeq[w.triggerActionSeq] : null;
-  if (a && a.actorId) return `${seatById(state, a.actorId)?.name || "?"} declares ${cap(a.type || "an action")}`;
-  return "A window is open";
+  if (a && a.actorId) return `${seatById(state, a.actorId)?.name || "Opponent"} claims ${cap(a.character || a.type || "an action")}`;
+  return "An action is pending review";
 }
 
 function holdWindowModal(state) {
@@ -193,11 +238,26 @@ function updateWindowModal(state) {
       const mine = id === state.mySeatId;
       const val = w.responses[id];
       let cls = "", word = `<span class="pending-dot">…</span>`, aria = "has not responded yet";
-      if (mine && w.iResponded) { word = `<span>${esc(w.myResponseLabel || "answered")}</span>`; }
-      else if (val === "pass") { cls = "passed"; word = "passed"; }
-      else if (val === "challenge") { cls = "challenged"; word = "challenged!"; }
-      else if (val && val.startsWith("counterclaim:")) { cls = "blocked"; word = `blocks as ${cap(val.slice(13))}`; }
-      return `<span class="pchip ${cls}${mine ? " mine" : ""}">${renderName(seat)}<span class="pstate" aria-label="${aria}">${word}</span></span>`;
+      let icon = "⏳";
+      if (mine && w.iResponded) {
+        word = `<span>${esc(w.myResponseLabel || "answered")}</span>`;
+        cls = "mine-answered";
+        icon = "✓";
+      } else if (val === "pass") {
+        cls = "passed";
+        word = "passed";
+        icon = "—";
+      } else if (val === "challenge") {
+        cls = "challenged";
+        word = "challenged!";
+        icon = "⚔️";
+      } else if (val && val.startsWith("counterclaim:")) {
+        const ch = val.slice(13);
+        cls = `blocked blocked-${ch}`;
+        word = `blocks as ${cap(ch)}`;
+        icon = "🛡️";
+      }
+      return `<span class="pchip ${cls}${mine ? " mine" : ""}"><span class="pchip-icon">${icon}</span>${renderName(seat)}<span class="pstate" aria-label="${aria}">${word}</span></span>`;
     }).join("");
   }
 
@@ -229,6 +289,8 @@ function updateWindowModal(state) {
   if (!foot) return;
   if (ui.win.mode === "deciding" && !w.iResponded) {
     foot.innerHTML = "";
+    const isBlock = w.kind === "counterclaim_challenge";
+    const isTarget = !isBlock && !!w.targetSeatId && w.targetSeatId === state.mySeatId;
     const order = RESP_ORDER.filter((k) => w.myAllowed.includes(k));
     // Unknown future grammar values render raw and fail closed to a toast (§8.1).
     for (const k of w.myAllowed) if (!order.includes(k)) order.push(k);
@@ -238,7 +300,23 @@ function updateWindowModal(state) {
       btn.type = "button";
       btn.dataset.resp = k;
       btn.className = "btn " + (def ? def.cls : "btn-outline"); // unknown → plain outline
-      btn.textContent = def ? def.label : esc(k);
+
+      let label = def ? def.label : esc(k);
+      let icon = def ? def.icon : "";
+      if (k === "pass") {
+        if (isBlock) label = "Accept Block (Pass)";
+        else if (isTarget) label = "Yield / Allow (Pass)";
+        else label = "Allow (Pass)";
+      } else if (k === "challenge") {
+        if (isBlock) label = "Challenge Block";
+        else label = "Challenge Claim";
+      }
+
+      if (icon) {
+        btn.innerHTML = `<span class="btn-ic">${icon}</span> ${esc(label)}`;
+      } else {
+        btn.textContent = label;
+      }
       btn.addEventListener("click", () => submitResponse(state, k));
       foot.appendChild(btn);
     }
@@ -317,8 +395,11 @@ export function transitionWindowModalOnClose(state, justClosedId) {
 function syncReopenPill(state) {
   const felt = document.getElementById("felt");
   if (!felt) return;
-  const should = !!(state.window && state.window.eligible.includes(state.mySeatId)
-    && !state.window.iResponded && (!ui.win || !ui.win.open) && state.status === "in_progress");
+  const w = state.window;
+  const canRespond = !!(w && Array.isArray(w.eligible) && w.eligible.includes(state.mySeatId)
+    && (w.kind !== "challenge" || w.actorId !== state.mySeatId)
+    && (w.kind !== "counterclaim_challenge" || w.blockerId !== state.mySeatId));
+  const should = !!(canRespond && !w.iResponded && (!ui.win || !ui.win.open) && state.status === "in_progress");
   if (should && !ui.reopenPill) {
     const el = document.createElement("div");
     el.className = "reopen-pill";
@@ -380,37 +461,78 @@ function setDecisionStatus(h, html, stale = false) {
 
 // ---- flip choice (§9.2) ----------------------------------------------------
 function openFlipModal(state, d) {
-  const h = baseDecisionShell(state, "Which card falls?", "SINGLE CHOICE");
+  const h = baseDecisionShell(state, "Which card falls?", "INFLUENCE LOST");
   const cards = state.myHand.slice(0, 2); // option index i ↔ your_face_down_cards[i] (§5.4/U5)
-  h.panel.querySelector("#dec-body").innerHTML = `
-    <div class="dc-cards">
-      ${cards.map((c, i) => `<div class="dcard"><span class="stripe" style="background:${charColor(c)}"></span>
-        <span class="cname">${cap(c)}</span><span class="pos">${i + 1}</span></div>`).join("")}
+  const bodyEl = h.panel.querySelector("#dec-body");
+
+  bodyEl.innerHTML = `
+    <div class="flip-intro">Select an influence card to reveal face-up. This influence is permanently lost.</div>
+    <div class="card-grid" id="flip-cards">
+      ${cards.map((c, i) => `
+        <div class="card-choice flip-card" id="flip-card-${i}" data-idx="${i}" role="button" tabindex="0"
+             aria-label="Flip Card ${i + 1}: ${cap(c)}. Press key ${i + 1} or Enter to flip.">
+          <span class="stripe" style="background:${charColor(c)}"></span>
+          <span class="card-key-badge">Key [ ${i + 1} ]</span>
+          <div class="card-mono" style="color:${charColor(c)}">${charMonogram(c)}</div>
+          <div class="card-name">${cap(c)}</div>
+          <div class="card-tag">Flip Card ${i + 1}</div>
+        </div>
+      `).join("")}
     </div>
-    <div class="dc-labels">
-      ${cards.map((_, i) => `<span>Card ${i + 1} — face_down_${i}</span>`).join("")}
-    </div>`;
+    <p class="modal-sub" style="margin:10px 0 0;text-align:center">Click a card or press <strong>1</strong> ${cards.length > 1 ? "or <strong>2</strong>" : ""} on your keyboard.</p>`;
 
   const foot = h.panel.querySelector("#dec-foot");
-  cards.forEach((_, i) => {
+  cards.forEach((c, i) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "btn btn-outline";
-    btn.textContent = `Flip card ${i + 1}`;
+    btn.className = "btn btn-danger";
+    btn.innerHTML = `<span>Flip Card ${i + 1} (${cap(c)})</span> <kbd class="kbd-badge">[${i + 1}]</kbd>`;
     btn.addEventListener("click", () => submitFlipChoice(state, d, `face_down_${i}`, i));
     foot.appendChild(btn);
   });
 
+  // Card click & keyboard handlers
+  cards.forEach((_, i) => {
+    const el = bodyEl.querySelector(`#flip-card-${i}`);
+    if (!el) return;
+    const trigger = () => submitFlipChoice(state, d, `face_down_${i}`, i);
+    el.addEventListener("click", trigger);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        trigger();
+      }
+    });
+  });
+
+  // Global key listener for keys 1 and 2
+  const onKey = (e) => {
+    if (ui.dec && ui.dec.id === d.id && ui.dec.mode === "deciding") {
+      if (e.key === "1" || e.code === "Digit1" || e.code === "Numpad1") {
+        e.preventDefault();
+        submitFlipChoice(state, d, "face_down_0", 0);
+      } else if ((e.key === "2" || e.code === "Digit2" || e.code === "Numpad2") && cards.length >= 2) {
+        e.preventDefault();
+        submitFlipChoice(state, d, "face_down_1", 1);
+      }
+    }
+  };
+  window.addEventListener("keydown", onKey);
+
   ui.dec = { h, id: d.id, kind: "flip_choice", mode: "deciding", timer: null,
+    cleanup() { window.removeEventListener("keydown", onKey); },
     get open() { return this.h.open; } }; // .open lives on the shell handle
   decisionCountdown(state, d);
-  h.focusInitial(".m-foot button");
+  h.focusInitial("#flip-card-0");
 }
 
 async function submitFlipChoice(state, d, option, index) {
   if (ui.dec && ui.dec.mode !== "deciding") return;
+  if (ui.dec && ui.dec.cleanup) ui.dec.cleanup();
   const foot = ui.dec.h.panel.querySelector("#dec-foot");
   if (foot) foot.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const cards = ui.dec.h.panel.querySelectorAll(".card-choice");
+  cards.forEach((c) => { c.classList.add("disabled"); c.setAttribute("aria-disabled", "true"); });
   try {
     await apiPost(state, `/games/${state.gameId}/decisions`, { kind: "choose", decision_id: d.id, choice: { flip_choice: option } });
     d.submitted = true; // settles S3 vs S4 copy when the card_flipped event lands (§9.2)
@@ -420,94 +542,220 @@ async function submitFlipChoice(state, d, option, index) {
     if (!(e instanceof ApiError)) throw e;
     rejectToast(e.code, e.message); // incl. 409 "that decision was already made" (§9.2: no state change)
     if (foot) foot.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    cards.forEach((c) => { c.classList.remove("disabled"); c.removeAttribute("aria-disabled"); });
   }
 }
 
 // ---- exchange finish (§9.3) --------------------------------------------------
 function openExchangeModal(state, d) {
-  const h = baseDecisionShell(state, "Your Exchange held — choose what to keep.", "SINGLE CHOICE");
+  const h = baseDecisionShell(state, "Exchange Influence", "COURT EXCHANGE");
   const drawn = d.drawn || [];
-  const hand = state.myHand;
+  const hand = state.myHand || [];
   if (drawn.length === 0) {
     // Bootstrap without a replayed reveal — the private event is coming; wait.
     setDecisionStatus(h, "The draw is on its way…");
     ui.dec = { h, id: d.id, kind: "exchange_finish", mode: "waiting", timer: null,
-    get open() { return this.h.open; } }; // .open lives on the shell handle
+      get open() { return this.h.open; } }; // .open lives on the shell handle
     return;
   }
 
   const bodyEl = h.panel.querySelector("#dec-body");
-  const orig = bodyEl.innerHTML; // drop the hint into foot area? keep as-is; add rows
-  bodyEl.insertAdjacentHTML("afterbegin", `
-    <div class="dc-rowcap">YOU DREW (only you can see these)</div>
-    <div class="dc-cards">
-      ${drawn.map((c, i) => `<div class="dcard" id="dc-drawn-${i}"><span class="stripe" style="background:${charColor(c)}"></span>
-        <span class="cname">${cap(c)}</span><span class="pos">${i === 0 ? "L" : "R"}</span></div>`).join("")}
+  bodyEl.innerHTML = `
+    <div class="ex-no-swap-banner">
+      <button type="button" class="btn btn-outline" id="btn-no-swap">
+        <span class="tally-ic">✓</span> Keep Both Hand Cards (No Swap)
+      </button>
     </div>
-    <div class="dc-rowcap" style="margin-top:14px">YOUR HAND</div>
-    <div class="dc-cards">
-      ${hand.map((c, i) => `<div class="dcard"><span class="stripe" style="background:${charColor(c)}"></span>
-        <span class="cname">${cap(c)}</span><span class="pos">${i + 1}</span></div>`).join("")}
-    </div>
-    <div class="dc-rowcap" style="margin-top:14px">KEEP WHAT YOU WANT</div>
-    <div id="ex-choice"></div>
-    <div id="ex-return" hidden></div>`);
-  void orig;
 
-  const choice = { keep: null, handIdx: null }; // keep: null|0|1 (drawn_index), handIdx: returned card index
-  const choiceEl = bodyEl.querySelector("#ex-choice");
-  const returnEl = bodyEl.querySelector("#ex-return");
+    <div class="ex-box">
+      <div class="ex-box-head">
+        <span class="ex-box-title">Court Deck Draw — Visible only to you</span>
+        <span class="ex-box-badge">🔒 Private</span>
+      </div>
+      <div class="card-grid" id="ex-drawn-cards">
+        ${drawn.map((c, i) => `
+          <div class="card-choice ex-card" id="ex-drawn-${i}" data-idx="${i}" role="button" tabindex="0"
+               aria-label="Drawn Card ${i + 1}: ${cap(c)}">
+            <span class="stripe" style="background:${charColor(c)}"></span>
+            <span class="card-key-badge">${i === 0 ? "Left" : "Right"}</span>
+            <div class="card-mono" style="color:${charColor(c)}">${charMonogram(c)}</div>
+            <div class="card-name">${cap(c)}</div>
+            <div class="card-tag" id="ex-drawn-tag-${i}">Keep Card</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="ex-box">
+      <div class="ex-box-head">
+        <span class="ex-box-title">Your Current Hand</span>
+        <span class="ex-box-badge">${hand.length} Card${hand.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="card-grid" id="ex-hand-cards">
+        ${hand.map((c, i) => `
+          <div class="card-choice ex-card" id="ex-hand-${i}" data-idx="${i}" role="button" tabindex="0"
+               aria-label="Hand Card ${i + 1}: ${cap(c)}">
+            <span class="stripe" style="background:${charColor(c)}"></span>
+            <span class="card-key-badge">Card ${i + 1}</span>
+            <div class="card-mono" style="color:${charColor(c)}">${charMonogram(c)}</div>
+            <div class="card-name">${cap(c)}</div>
+            <div class="card-tag" id="ex-hand-tag-${i}">Keep in Hand</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="ex-summary-bar" id="ex-summary">
+      <span class="ex-summary-icon" id="ex-summary-icon">ℹ️</span>
+      <span class="ex-summary-text" id="ex-summary-text"></span>
+    </div>`;
+
+  const choice = { keep: null, handIdx: null }; // keep: null|0|1 (drawn_index), handIdx: returned card index (0 or 1)
   const foot = h.panel.querySelector("#dec-foot");
 
-  function renderChoice() {
-    choiceEl.innerHTML = ["Keep neither", "Keep left", "Keep right"].map((label) => {
-      const idx = label === "Keep neither" ? null : (label === "Keep left" ? 0 : 1);
-      const sel = choice.keep === idx && (idx === null || choice.handIdx != null);
-      return `<button type="button" class="btn btn-outline${sel ? "" : ""}" data-keep="${idx === null ? -1 : idx}"
-        style="${choice.keep === idx ? "border-color:var(--gold-bright);color:var(--gold-bright)" : ""}">${label}</button>`;
-    }).join(" ");
-    choiceEl.querySelectorAll("[data-keep]").forEach((b) => {
-      b.addEventListener("click", () => {
-        const k = parseInt(b.dataset.keep, 10);
-        choice.keep = k === -1 ? null : k;
-        choice.handIdx = null;
-        [document.getElementById("dc-drawn-0"), document.getElementById("dc-drawn-1")].forEach((el) => el && el.classList.remove("hl"));
-        if (choice.keep !== null) {
-          const cardEl = document.getElementById(`dc-drawn-${choice.keep}`);
-          if (cardEl) cardEl.classList.add("hl"); // gold ring on the kept draw (§9.3)
-          returnEl.hidden = false;
-          returnEl.innerHTML = `<div class="dc-rowcap">Return which hand card?</div><div id="ex-return-btns"></div>`;
-          const rb = returnEl.querySelector("#ex-return-btns");
-          rb.innerHTML = hand.map((_, i) => `<button type="button" class="btn btn-outline" data-hi="${i}" style="margin-right:8px">Card ${i + 1}</button>`).join("");
-          rb.querySelectorAll("[data-hi]").forEach((bb) => bb.addEventListener("click", () => {
-            choice.handIdx = parseInt(bb.dataset.hi, 10);
-            renderChoice();
-          }));
-        } else {
-          returnEl.hidden = true; // keep-neither skips straight to confirm (§9.3)
+  function updateExchangeView() {
+    const noSwapBtn = bodyEl.querySelector("#btn-no-swap");
+    const summaryIcon = bodyEl.querySelector("#ex-summary-icon");
+    const summaryText = bodyEl.querySelector("#ex-summary-text");
+
+    if (choice.keep === null) {
+      if (noSwapBtn) noSwapBtn.classList.add("active");
+      // Drawn cards: both return to deck
+      drawn.forEach((_, i) => {
+        const el = bodyEl.querySelector(`#ex-drawn-${i}`);
+        const tag = bodyEl.querySelector(`#ex-drawn-tag-${i}`);
+        if (el) {
+          el.classList.remove("kept");
+          el.classList.add("dimmed");
         }
-        renderChoiceButtons();
+        if (tag) tag.textContent = "↩ Returns to Deck";
       });
-    });
+      // Hand cards: both kept in hand
+      hand.forEach((_, i) => {
+        const el = bodyEl.querySelector(`#ex-hand-${i}`);
+        const tag = bodyEl.querySelector(`#ex-hand-tag-${i}`);
+        if (el) {
+          el.classList.add("kept");
+          el.classList.remove("returned", "dimmed");
+        }
+        if (tag) tag.textContent = "✓ Keep in Hand";
+      });
+      if (summaryIcon) summaryIcon.textContent = "✓";
+      if (summaryText) summaryText.textContent = "Keeping both hand cards. Both drawn cards will return to the Court Deck.";
+    } else {
+      if (noSwapBtn) noSwapBtn.classList.remove("active");
+      // Drawn cards: choice.keep is kept, other is returned
+      drawn.forEach((c, i) => {
+        const el = bodyEl.querySelector(`#ex-drawn-${i}`);
+        const tag = bodyEl.querySelector(`#ex-drawn-tag-${i}`);
+        if (i === choice.keep) {
+          if (el) { el.classList.add("kept"); el.classList.remove("dimmed"); }
+          if (tag) tag.textContent = "✓ KEEP THIS CARD";
+        } else {
+          if (el) { el.classList.remove("kept"); el.classList.add("dimmed"); }
+          if (tag) tag.textContent = "↩ Returns to Deck";
+        }
+      });
+      // Hand cards: choice.handIdx is replaced & returned, other kept
+      hand.forEach((c, i) => {
+        const el = bodyEl.querySelector(`#ex-hand-${i}`);
+        const tag = bodyEl.querySelector(`#ex-hand-tag-${i}`);
+        if (i === choice.handIdx) {
+          if (el) { el.classList.add("returned"); el.classList.remove("kept", "dimmed"); }
+          if (tag) tag.textContent = "↩ REPLACING (TO DECK)";
+        } else {
+          if (el) { el.classList.add("kept"); el.classList.remove("returned", "dimmed"); }
+          if (tag) tag.textContent = "✓ Keep in Hand";
+        }
+      });
+      if (summaryIcon) summaryIcon.textContent = "🔄";
+      if (summaryText) {
+        if (choice.handIdx != null && hand[choice.handIdx]) {
+          summaryText.textContent = `Swap: Keeping ${cap(drawn[choice.keep])} and returning ${cap(hand[choice.handIdx])} to the Court Deck.`;
+        } else {
+          summaryText.textContent = `Keeping ${cap(drawn[choice.keep])}. Click a hand card above to choose which card to replace.`;
+        }
+      }
+    }
+    renderFooter();
   }
-  function renderChoiceButtons() {
+
+  function renderFooter() {
     foot.innerHTML = "";
+    const noSwapAction = document.createElement("button");
+    noSwapAction.type = "button";
+    noSwapAction.className = "btn btn-outline";
+    noSwapAction.textContent = "Keep Current Hand (No Swap)";
+    noSwapAction.addEventListener("click", () => {
+      choice.keep = null;
+      choice.handIdx = null;
+      updateExchangeView();
+    });
+
     const confirm = document.createElement("button");
     confirm.type = "button";
     confirm.className = "btn btn-primary";
-    confirm.textContent = "Seal it";
     const ready = choice.keep === null || (choice.keep !== null && choice.handIdx != null);
     confirm.disabled = !ready;
+    confirm.textContent = choice.keep === null ? "Seal Exchange (No Swap)" : "Seal Exchange (Confirm Swap)";
     confirm.addEventListener("click", () => submitExchange(state, d, choice));
+
+    foot.appendChild(noSwapAction);
     foot.appendChild(confirm);
   }
-  renderChoice();
-  renderChoiceButtons();
+
+  // Wire up no-swap button
+  const noSwapBtn = bodyEl.querySelector("#btn-no-swap");
+  if (noSwapBtn) {
+    noSwapBtn.addEventListener("click", () => {
+      choice.keep = null;
+      choice.handIdx = null;
+      updateExchangeView();
+    });
+  }
+
+  // Drawn card clicks & keyboard
+  drawn.forEach((_, i) => {
+    const el = bodyEl.querySelector(`#ex-drawn-${i}`);
+    if (!el) return;
+    const select = () => {
+      choice.keep = i;
+      if (hand.length === 1) {
+        choice.handIdx = 0;
+      } else if (choice.handIdx == null) {
+        choice.handIdx = 0; // sensible default so it's ready, but user can click either hand card
+      }
+      updateExchangeView();
+    };
+    el.addEventListener("click", select);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
+    });
+  });
+
+  // Hand card clicks & keyboard
+  hand.forEach((_, i) => {
+    const el = bodyEl.querySelector(`#ex-hand-${i}`);
+    if (!el) return;
+    const select = () => {
+      if (choice.keep === null) {
+        choice.keep = 0; // if no drawn card was selected yet, default to first drawn card
+      }
+      choice.handIdx = i;
+      updateExchangeView();
+    };
+    el.addEventListener("click", select);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
+    });
+  });
+
+  updateExchangeView();
 
   ui.dec = { h, id: d.id, kind: "exchange_finish", mode: "deciding", timer: null,
     get open() { return this.h.open; } }; // .open lives on the shell handle
   decisionCountdown(state, d);
-  h.focusInitial("#ex-choice button");
+  h.focusInitial("#btn-no-swap");
 }
 
 async function submitExchange(state, d, choice) {
@@ -516,18 +764,23 @@ async function submitExchange(state, d, choice) {
   if (choice.keep === null) {
     bodyChoice = { exchange_finish: { no_swap: true } }; // U4 — wire shape confirmed against tech spec §11.2(a)
   } else {
-    bodyChoice = { exchange_finish: { drawn_index: choice.keep, hand_option: `face_down_${choice.handIdx}` } };
+    const handIdx = choice.handIdx != null ? choice.handIdx : 0;
+    bodyChoice = { exchange_finish: { drawn_index: choice.keep, hand_option: `face_down_${handIdx}` } };
   }
   const foot = ui.dec.h.panel.querySelector("#dec-foot");
   if (foot) foot.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const cards = ui.dec.h.panel.querySelectorAll(".card-choice");
+  cards.forEach((c) => { c.classList.add("disabled"); c.setAttribute("aria-disabled", "true"); });
   try {
     await apiPost(state, `/games/${state.gameId}/decisions`, { kind: "choose", decision_id: d.id, choice: bodyChoice });
     // §9.3/§7.3: apply MY OWN hand change locally now — I know both sides of the
     // swap; the public exchange_completed must not double-apply it.
     if (choice.keep !== null) {
-      const returned = choice.handIdx;
-      const other = returned === 0 ? 1 : 0;
-      state.myHand = [d.drawn[choice.keep], state.myHand[other]];
+      // FIX CRITICAL HAND CORRUPTION BUG:
+      // In Go backend (domain/resolve.go line 301): actor.FaceDown[handIdx] = kept.
+      // The card at handIdx is replaced by the chosen drawn card.
+      const handIdx = choice.handIdx != null ? choice.handIdx : 0;
+      state.myHand[handIdx] = d.drawn[choice.keep];
     } // keep-neither: hand unchanged
     d.submitted = true;
     if (ui.dec) { ui.dec.mode = "locked"; setDecisionStatus(ui.dec.h, "Sealed — the deck took two back."); }
@@ -536,6 +789,7 @@ async function submitExchange(state, d, choice) {
     if (!(e instanceof ApiError)) throw e;
     rejectToast(e.code, e.message);
     if (foot) foot.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    cards.forEach((c) => { c.classList.remove("disabled"); c.removeAttribute("aria-disabled"); });
   }
 }
 
@@ -544,6 +798,7 @@ async function submitExchange(state, d, choice) {
 export function settleDecisionModal(state, d) {
   const m = ui.dec;
   if (!m || m.id !== d.id || !m.open) return;
+  if (m.cleanup) m.cleanup();
   let line, stale;
   if (d.settled === "done") line = "Done.";
   else if (d.settled === "expired") { line = "Time passed — the table chose for you."; stale = true; }
@@ -553,7 +808,13 @@ export function settleDecisionModal(state, d) {
   setDecisionStatus(m.h, line, stale);
   m.timer && clearTimeout(m.timer);
   m.timer = setTimeout(() => {
-    if (ui.dec === m) { ui.dec = null; if (state.decision === d) state.decision = null; m.h.close(); refresh(); }
+    if (ui.dec === m) {
+      if (ui.dec.cleanup) ui.dec.cleanup();
+      ui.dec = null;
+      if (state.decision === d) state.decision = null;
+      m.h.close();
+      refresh();
+    }
   }, 3500); // U10
 }
 
@@ -567,16 +828,32 @@ export function openForfeitInitiation(state) {
     <div class="m-head">
       <span class="modal-kicker">FORFEIT VOTE</span>
       <h2 class="modal-title" id="feat-title">Call a forfeit vote</h2>
-      <p class="modal-sub">Use it when a seat — human or AI — is stuck and the table can't move on.
-      The other human seats vote; nothing happens unless a majority agrees.</p>
+      <p class="modal-sub">Use it when a seat — human or AI — is stuck or disconnected and the table cannot proceed.
+      The other human seats vote; a majority is required to forfeit the player.</p>
     </div>
-    <div class="m-body"><div id="feat-list"></div></div>`;
+    <div class="m-body"><div id="feat-list"></div></div>
+    <div class="m-foot"><button type="button" class="btn btn-outline" id="feat-close-btn">Cancel</button></div>`;
+  h.panel.querySelector("#feat-close-btn").addEventListener("click", () => h.close());
   const listEl = h.panel.querySelector("#feat-list");
 
   function renderTargets() {
     const targets = state.seats.filter((s) => s.active && s.id !== state.mySeatId); // U18: never self
+    if (targets.length === 0) {
+      listEl.innerHTML = `<p class="modal-sub" style="text-align:center;padding:16px 0">No other active players to forfeit.</p>`;
+      return;
+    }
     listEl.innerHTML = `<div class="feat-list">` + targets.map((t) =>
-      `<button type="button" class="feat-row" data-tid="${t.id}">${renderName(t)} <span class="fcoins">${t.coins}</span></button>`).join("") + `</div>`;
+      `<button type="button" class="feat-row" data-tid="${t.id}" aria-label="Call forfeit vote against ${esc(t.name)}">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="seat-num">${t.seatNum != null ? t.seatNum : "?"}</span>
+          <span>${renderName(t)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="fcards" title="Influences remaining">🂠 ${t.faceDownCount != null ? t.faceDownCount : "?"} cards</span>
+          <span class="fcoins">🪙 ${t.coins}</span>
+          <span class="btn btn-outline btn-ghost" style="font-size:12px;padding:2px 8px;border:1px solid var(--line-strong)">Vote</span>
+        </div>
+      </button>`).join("") + `</div>`;
     listEl.querySelectorAll(".feat-row").forEach((b) => b.addEventListener("click", () => renderConfirm(b.dataset.tid)));
   }
 
@@ -584,10 +861,13 @@ export function openForfeitInitiation(state) {
     const t = seatById(state, tid);
     if (!t) return;
     listEl.innerHTML = `
-      <div class="confirm-line">Really call ${renderName(t)}? The other humans get asked.</div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
+      <div style="background:rgba(179,64,47,0.14);border:1px solid var(--red-bright);border-radius:8px;padding:14px;margin-bottom:14px">
+        <div style="font-weight:700;color:var(--red-bright);margin-bottom:4px;font-size:14px">⚠️ Call forfeit vote against ${renderName(t)}?</div>
+        <div style="font-size:12.5px;color:var(--ink);line-height:1.45">All other human seats will vote YES or NO. If a majority agrees, ${renderName(t)} forfeits immediately and their cards are returned unrevealed to the deck.</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
         <button type="button" class="btn btn-outline" id="feat-cancel">Cancel</button>
-        <button type="button" class="btn btn-danger" id="feat-confirm">Confirm</button>
+        <button type="button" class="btn btn-danger" id="feat-confirm">Initiate Vote</button>
       </div>`;
     listEl.querySelector("#feat-cancel").addEventListener("click", renderTargets);
     listEl.querySelector("#feat-confirm").addEventListener("click", () => {
@@ -653,25 +933,27 @@ function updateBallot(state) {
   const y = Object.values(v.votes).filter((x) => x === "yes").length;
   const n = Object.values(v.votes).filter((x) => x === "no").length;
   const total = Math.max(1, y + n);
+  const totalEligible = Math.max(1, v.eligibleVoters.length);
   const pctY = (y / total) * 100;
-  const needFrac = v.majorityNeeded / Math.max(1, v.eligibleVoters.length);
+  const needFrac = v.majorityNeeded / totalEligible;
 
   m.h.panel.querySelector("#vote-body").innerHTML = `
     <div class="tally-line">
-      <span class="tally-counts"><span class="y">YES ${y}</span> &nbsp;&nbsp; <span class="n">NO ${n}</span></span>
-      <span class="tally-need">majority: ${v.majorityNeeded} of ${v.eligibleVoters.length}</span>
+      <span class="tally-counts"><span class="y"><span class="tally-ic">✓</span>YES ${y}</span> &nbsp;&nbsp; <span class="n"><span class="tally-ic">✕</span>NO ${n}</span></span>
+      <span class="tally-need">Majority required: <strong>${v.majorityNeeded} of ${v.eligibleVoters.length}</strong></span>
     </div>
-    <div class="tally-bar" aria-hidden="true">
+    <div class="tally-bar" aria-hidden="true" title="${y} Yes, ${n} No">
       <span class="tally-fill-y" style="width:${pctY}%"></span>
       <span class="tally-fill-n" style="width:${100 - pctY}%"></span>
-      <span class="tally-tick" style="left:${(needFrac * 100).toFixed(1)}%"></span>
+      <span class="tally-tick" style="left:${(needFrac * 100).toFixed(1)}%" title="Threshold (${v.majorityNeeded})"></span>
     </div>
+    <div style="font-size:11px;font-weight:700;letter-spacing:.1em;color:var(--ink-dim);text-transform:uppercase;margin:12px 0 6px">Voter Status</div>
     <div class="voters">` + v.eligibleVoters.map((id) => {
       const seat = seatById(state, id);
       const vote = v.votes[id];
-      const chip = vote === "yes" ? `<span class="vchip yes">VOTED YES</span>`
-        : vote === "no" ? `<span class="vchip no">VOTED NO</span>`
-        : `<span class="vchip pending">…</span>`;
+      const chip = vote === "yes" ? `<span class="vchip yes">✓ VOTED YES</span>`
+        : vote === "no" ? `<span class="vchip no">✕ VOTED NO</span>`
+        : `<span class="vchip pending">⏳ Waiting…</span>`;
       return `<div class="voter-row">${renderName(seat)}${chip}</div>`;
     }).join("") + `</div>`;
 
@@ -679,21 +961,25 @@ function updateBallot(state) {
   if (v.result) {
     const target = seatById(state, v.targetSeatId);
     const line = v.result === "forfeited"
-      ? `${renderName(target)} is forfeited. Their cards are never shown.`
-      : `The vote fails ${y}–${n}. ${renderName(target)} stays.`; // U12: not_forfeited/voided render the fail line
-    foot.innerHTML = `<div class="m-status" style="padding:8px 0 4px">${line}</div>`;
+      ? `🏛️ ${renderName(target)} is forfeited. Their cards are never shown.`
+      : `The vote fails ${y}–${n}. ${renderName(target)} remains at the table.`; // U12: not_forfeited/voided render the fail line
+    foot.innerHTML = `<div class="m-status" style="padding:12px 0 4px">${line}</div>`;
     m.timer && clearTimeout(m.timer);
     m.timer = setTimeout(() => { if (ui.ballot === m) closeBallotResolved(); }, 4000); // U10
   } else if (v.myVote) {
-    foot.innerHTML = `<div class="m-status" style="padding:8px 0 4px">You voted ${v.myVote.toUpperCase()}.</div>`;
+    foot.innerHTML = `<div class="m-status" style="padding:12px 0 4px">You voted <strong>${v.myVote.toUpperCase()}</strong>. Waiting for other ballots…</div>`;
   } else {
     foot.innerHTML = "";
     const yes = document.createElement("button");
-    yes.type = "button"; yes.id = "vote-yes"; yes.className = "btn btn-yes"; yes.textContent = "Vote YES";
+    yes.type = "button"; yes.id = "vote-yes"; yes.className = "btn btn-yes"; yes.style.flex = "1";
+    yes.innerHTML = `<span>✓ Vote YES (Forfeit)</span>`;
     yes.addEventListener("click", () => castBallot(state, true));
+
     const no = document.createElement("button");
-    no.type = "button"; no.className = "btn btn-danger"; no.textContent = "Vote NO";
+    no.type = "button"; no.id = "vote-no"; no.className = "btn btn-danger"; no.style.flex = "1";
+    no.innerHTML = `<span>✕ Vote NO (Keep)</span>`;
     no.addEventListener("click", () => castBallot(state, false));
+
     foot.appendChild(yes); foot.appendChild(no);
   }
 }
@@ -731,9 +1017,10 @@ export function showGameOver(state) {
 
   const winner = seatById(state, state.winnerId);
   const iWin = !!winner && winner.id === state.mySeatId;
-  // Standings: active-first then eliminated (§10.6).
+  // Standings: winner first, then active, then eliminated (§10.6).
   const ordered = [
-    ...state.seats.filter((s) => s.active),
+    ...(winner ? [winner] : []),
+    ...state.seats.filter((s) => s.id !== state.winnerId && s.active),
     ...state.seats.filter((s) => !s.active),
   ];
 
@@ -741,16 +1028,52 @@ export function showGameOver(state) {
   root.innerHTML = `<div class="overlay-root">
     <div class="overlay-backdrop"></div>
     <div class="go-panel" role="dialog" aria-modal="true" aria-labelledby="go-title">
+      <div class="go-trophy">${iWin ? "🏆" : "👑"}</div>
       <span class="modal-kicker">THE TABLE CLOSES</span>
-      <h2 class="go-title" id="go-title">${iWin ? "GAME OVER — YOU WIN THE TABLE." : "GAME OVER"}</h2>
-      <div class="go-winner">${winner ? renderName(winner) : "?"}</div>
-      <div class="go-sub">wins the table.</div>
-      <div class="standings">` + ordered.map((s) => {
-        const isW = s.id === state.winnerId;
-        return `<div class="standing-row ${isW ? "win" : ""} ${s.active ? "" : "out"}">
-          <span>${renderName(s)}</span><span class="s-coins-in">${s.coins}</span></div>`;
-      }).join("") + `</div>
-      <button type="button" class="btn btn-primary" id="go-lobby" style="width:100%">Back to lobby</button>
+      <h2 class="go-title" id="go-title">${iWin ? "VICTORY!" : "GAME OVER"}</h2>
+      <div class="${iWin ? "go-victory-badge" : "go-defeat-badge"}">
+        ${iWin ? "YOU WON THE TABLE" : `${winner ? esc(winner.name) : "?"} WINS`}
+      </div>
+      <div class="go-sub">
+        ${iWin ? "Congratulations! You eliminated all rivals and claimed the table." : `${winner ? renderName(winner) : "?"} is the sole survivor.`}
+      </div>
+      <table class="standings-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Player</th>
+            <th>Status</th>
+            <th>Influence</th>
+            <th>Coins</th>
+          </tr>
+        </thead>
+        <tbody>` + ordered.map((s, idx) => {
+          const isW = s.id === state.winnerId;
+          const rankText = isW ? "🏆 1st" : `${idx + 1}th`;
+          const statusText = isW ? "Winner" : (s.active ? "Surviving" : "Eliminated");
+          let cardsDisplay = "";
+          if (isW) {
+            if (s.id === state.mySeatId && state.myHand && state.myHand.length) {
+              cardsDisplay = state.myHand.map((c) => chipHtml(c, s.name)).join(" ");
+            } else {
+              cardsDisplay = `${s.faceDownCount || 1} hidden card${(s.faceDownCount || 1) === 1 ? "" : "s"}`;
+            }
+          } else {
+            cardsDisplay = (s.faceUp || []).map((c) => chipHtml(c, s.name)).join(" ") || "—";
+          }
+          return `
+            <tr class="${isW ? "winner-row" : "eliminated-row"}">
+              <td class="rank-badge">${rankText}</td>
+              <td>${renderName(s)}</td>
+              <td>${statusText}</td>
+              <td>${cardsDisplay}</td>
+              <td style="font-family:var(--font-mono);color:var(--gold-bright)">🪙 ${s.coins}</td>
+            </tr>`;
+        }).join("") + `</tbody>
+      </table>
+      <button type="button" class="btn btn-primary" id="go-lobby" style="width:100%;height:44px;font-size:16px">
+        🏠 Return to Lobby
+      </button>
     </div></div>`;
   root.querySelector("#go-lobby").addEventListener("click", () => {
     closeOverlays();
@@ -883,13 +1206,16 @@ export function ensureSurfaces(state) {
   // §8 window response modal (+ reopen pill). A held window (✕/Esc) does NOT
   // auto-reopen — the docked pill is the explicit affordance (§8.1).
   const w = state.window;
-  if (w && w.eligible.includes(state.mySeatId)) {
+  const canRespond = !!(w && Array.isArray(w.eligible) && w.eligible.includes(state.mySeatId)
+    && (w.kind !== "challenge" || w.actorId !== state.mySeatId)
+    && (w.kind !== "counterclaim_challenge" || w.blockerId !== state.mySeatId));
+
+  if (canRespond) {
     if ((!ui.win || !ui.win.open) && ui.heldWindowId !== w.id) openWindowModal(state);
     else if (ui.win && ui.win.open) updateWindowModal(state);
   } else if (ui.win && ui.win.open) {
-    // Window gone or I'm not eligible: close it out per the §7.5/§8.1 states.
-    transitionWindowModalOnClose(state, w ? null : ui.win.windowId);
-    if (!state.window) { /* closed-state auto-close is arming */ }
+    // Window gone or viewer is actor/ineligible: close response modal immediately so viewer never votes on own action!
+    closeWindowModal();
   }
   syncReopenPill(state);
 

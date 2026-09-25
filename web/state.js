@@ -66,6 +66,13 @@ export function createState(gameId, session) {
     // action_declared events keyed by their own seq — fizzle wording, window
     // modal titles, "action word" lookups (ui-spec §7.3, §12).
     actionsBySeq: {},
+    // response_received events keyed by seq — drives nested block window titles
+    responsesBySeq: {},
+
+    // Most recent action declared across table and per seat — drives live feedback bubbles & banners
+    lastAction: null,          // { actorId, type, character, targetId, text, seq, ts }
+    lastActionBySeat: {},      // [seatId] -> { type, character, targetId, text, ts }
+    lastAlert: null,           // { kind: 'targeted'|'ai_turn', actorId, targetId, text, ts }
 
     logRows: [],
     lastSeq: 0,
@@ -103,13 +110,24 @@ export function mergeReplayedWindow(s) {
   w.actorId = r.actorId;
   w.triggerActionSeq = r.triggerActionSeq;
   w.blockerId = r.blockerId;
+  if (r.blockChar) w.blockChar = r.blockChar;
   if (r.deadlineAt != null) w.deadlineAt = r.deadlineAt; // event ts is authoritative
   const trig = r.triggerActionSeq ? s.actionsBySeq[r.triggerActionSeq] : null;
-  if (trig && trig.text) w.triggerText = trig.text;
-  if (!w.iResponded && w.myAllowed.length === 0 && s.mySeatId) {
-    w.myAllowed = deriveResponseGrammar(s); // snapshot may omit it for ineligible viewers only
-  } else if (s.mySeatId && r.eligible.includes(s.mySeatId) && w.myAllowed.length === 0) {
+  if (trig && trig.text) {
+    w.triggerText = trig.text;
+  } else if (r.triggerActionSeq && s.responsesBySeq[r.triggerActionSeq]) {
+    const respItem = s.responsesBySeq[r.triggerActionSeq];
+    const bSeat = seatById(s, respItem.seatId);
+    const charName = respItem.response && respItem.response.character;
+    w.triggerText = `${bSeat ? bSeat.name : "Opponent"} claims ${cap(charName || "a character")} to block`;
+  }
+  // Only derive response grammar if the viewer is eligible and NOT the actor/blocker
+  const isEligible = s.mySeatId && r.eligible.includes(s.mySeatId) && r.actorId !== s.mySeatId
+    && (!r.blockerId || r.blockerId !== s.mySeatId);
+  if (isEligible && !w.iResponded && w.myAllowed.length === 0) {
     w.myAllowed = deriveResponseGrammar(s);
+  } else if (!isEligible) {
+    w.myAllowed = [];
   }
 }
 
@@ -254,14 +272,22 @@ export function reduce(s, ev, opts = {}) {
       break;
 
     case "action_declared": {
-      s.actionsBySeq[p.seq] = {
+      const actObj = {
         type: p.action && p.action.type,
         character: p.action && p.action.character,
         actorId: p.actor_id,
         targetId: p.action && p.action.target_id,
         text: p.text || "",
         fizzled: null,
+        seq: p.seq,
+        ts: Date.now(),
       };
+      s.actionsBySeq[p.seq] = actObj;
+      s.lastAction = actObj;
+      s.lastActionBySeat[p.actor_id] = actObj;
+      if (p.action && p.action.target_id === s.mySeatId && p.actor_id !== s.mySeatId) {
+        s.lastAlert = { kind: "targeted", actorId: p.actor_id, actionType: p.action.type, text: p.text, ts: Date.now() };
+      }
       break;
     }
 
@@ -275,6 +301,26 @@ export function reduce(s, ev, opts = {}) {
     case "window_opened": {
       const prevDecider = s.lastWindowClose ? s.lastWindowClose.deciderSeatId : null;
       const trigSeq = p.trigger && p.trigger.action_seq;
+      let trigText = "";
+      let blockChar = null;
+      let blockerId = null;
+
+      if (p.kind === "counterclaim_challenge") {
+        blockerId = (p.trigger && p.trigger.actor_id) || prevDecider;
+        if (trigSeq && s.responsesBySeq[trigSeq]) {
+          const respItem = s.responsesBySeq[trigSeq];
+          if (respItem.response && respItem.response.character) {
+            blockChar = respItem.response.character;
+          }
+          if (respItem.seatId) blockerId = respItem.seatId;
+        }
+        const blockerSeat = seatById(s, blockerId);
+        const charName = blockChar ? cap(blockChar) : "their character";
+        trigText = `${blockerSeat ? blockerSeat.name : "Opponent"} claims ${charName} to block`;
+      } else if (trigSeq && s.actionsBySeq[trigSeq]) {
+        trigText = s.actionsBySeq[trigSeq].text || "";
+      }
+
       // The snapshot (seed truth) carries no eligible list — the live event is
       // the only source. In the forLog replay pass we keep a record of the last
       // still-open window so main.js can merge it into the seeded state.window
@@ -289,7 +335,8 @@ export function reduce(s, ev, opts = {}) {
         deadlineAt: (p.timeout_ms ? Date.parse(ev.ts) + p.timeout_ms : null),
         requireAll: !!p.require_all_responses,
         timeoutMs: p.timeout_ms || 0,
-        blockerId: p.kind === "counterclaim_challenge" ? prevDecider : null,
+        blockerId,
+        blockChar,
       };
       if (!opts.forLog) {
         s.phase = "window_open";
@@ -300,19 +347,45 @@ export function reduce(s, ev, opts = {}) {
           responses: {},
           iResponded: false,
           myResponseLabel: null,
-          triggerText: (trigSeq && s.actionsBySeq[trigSeq] && s.actionsBySeq[trigSeq].text) || "",
+          triggerText: trigText || (trigSeq && s.actionsBySeq[trigSeq] && s.actionsBySeq[trigSeq].text) || "",
+          blockerId,
+          blockChar,
         };
-        if (s.mySeatId) {
-          // The live event carries no per-seat grammar list (that field is
-          // snapshot-only), so re-derive it from the same §5.1 rules the server
-          // uses — the button set stays data-driven, never hard-coded per kind.
+        // Only derive response grammar if viewer is eligible and NOT the actor/blocker
+        const isEligible = s.mySeatId && s.window.eligible.includes(s.mySeatId)
+          && (s.window.kind !== "challenge" || s.window.actorId !== s.mySeatId)
+          && (s.window.kind !== "counterclaim_challenge" || blockerId !== s.mySeatId);
+        if (isEligible) {
           s.window.myAllowed = deriveResponseGrammar(s);
+        } else {
+          s.window.myAllowed = [];
         }
       }
       break;
     }
 
     case "response_received":
+      if (p.seq) {
+        s.responsesBySeq[p.seq] = { seq: p.seq, seatId: p.seat_id, response: p.response, windowId: p.window_id, ts: Date.now() };
+      }
+      if (p.response && p.response.type === "counterclaim") {
+        s.lastActionBySeat[p.seat_id] = {
+          type: "counterclaim",
+          character: p.response.character,
+          targetId: null,
+          text: `${seatById(s, p.seat_id)?.name || "Opponent"} blocks as ${cap(p.response.character || "character")}`,
+          ts: Date.now(),
+        };
+      } else if (p.response && (p.response.type === "challenge" || p.response === "challenge")) {
+        const actorName = s.window && s.window.actorId ? (seatById(s, s.window.actorId)?.name || "Opponent") : "claim";
+        s.lastActionBySeat[p.seat_id] = {
+          type: "challenge",
+          character: null,
+          targetId: s.window ? s.window.actorId : null,
+          text: `Challenges ${actorName}!`,
+          ts: Date.now(),
+        };
+      }
       if (!opts.forLog && s.window && p.window_id === s.window.id) {
         const v = canonicalResponse(p.response);
         if (v) {
@@ -367,6 +440,12 @@ export function reduce(s, ev, opts = {}) {
     case "action_fizzled": {
       const rec = s.actionsBySeq[p.action_seq];
       if (rec) rec.fizzled = p.reason;
+      if (s.lastAction && s.lastAction.seq === p.action_seq) {
+        s.lastAction.fizzled = p.reason;
+      }
+      if (rec && rec.actorId && s.lastActionBySeat[rec.actorId]) {
+        s.lastActionBySeat[rec.actorId].fizzled = p.reason;
+      }
       break;
     }
 
@@ -526,6 +605,14 @@ function applyMyFlip(s, card) {
 export function deriveResponseGrammar(s) {
   const w = s.window;
   if (!w || !s.mySeatId) return [];
+
+  // An actor can NEVER challenge or block their own declared turn action
+  if (w.kind === "challenge" && w.actorId === s.mySeatId) return [];
+  // A blocker can NEVER challenge their own counterclaim block
+  if (w.kind === "counterclaim_challenge" && w.blockerId === s.mySeatId) return [];
+  // If the eligible responder list is populated and the viewer is not in it, return []
+  if (Array.isArray(w.eligible) && w.eligible.length > 0 && !w.eligible.includes(s.mySeatId)) return [];
+
   const act = w.triggerActionSeq ? s.actionsBySeq[w.triggerActionSeq] : null;
   switch (w.kind) {
     case "counterclaim_challenge":
