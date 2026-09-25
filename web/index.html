@@ -27,6 +27,21 @@
   <span class="brand">Coup</span><span class="hairline"></span>
   <button type="button" class="gchip" id="game-chip" title="Copy the full game id"></button>
   <span class="spacer"></span>
+  <button type="button" class="topbar-btn" id="rules-btn" title="View Coup rules &amp; roles" aria-label="View Coup rules &amp; roles (Press ? or H)">
+    <span class="topbar-icon" aria-hidden="true">📜</span>
+    <span class="topbar-text">Rules &amp; Roles</span>
+    <span class="kbd-hint" aria-hidden="true">?</span>
+  </button>
+  <button type="button" class="topbar-btn" id="sound-toggle" title="Toggle sound" aria-label="Toggle sound (Press M)" aria-pressed="true">
+    <span class="topbar-icon" id="sound-icon" aria-hidden="true">🔊</span>
+    <span class="topbar-text" id="sound-text">Sound</span>
+    <span class="kbd-hint" aria-hidden="true">M</span>
+  </button>
+  <button type="button" class="topbar-btn" id="pace-toggle" title="AI Turn Pace: Normal (natural delay · Press P to cycle)" aria-label="AI Turn Pace: Normal (natural delay · Press P to cycle)">
+    <span class="topbar-icon" id="pace-icon" aria-hidden="true">⏱️</span>
+    <span class="topbar-text" id="pace-text">Pace: Normal</span>
+    <span class="kbd-hint" aria-hidden="true">P</span>
+  </button>
   <span class="conn" role="status" aria-live="polite">
     <i class="dot" id="conn-dot" aria-hidden="true"></i>
     <span class="visually-hidden" id="conn-text">live</span>
@@ -73,6 +88,8 @@
 
 <!-- Modal root — window response, flip choice, exchange finish, ballots, tokens -->
 <div id="modal-root"></div>
+<!-- Rules & roles cheatsheet modal root -->
+<div id="rules-root"></div>
 <!-- Game-over overlay lives above everything (ui-spec §10.6) -->
 <div id="overlay-root"></div>
 <!-- Toasts: bottom-center stack (ui-spec §4.7) -->

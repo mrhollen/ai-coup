@@ -18,6 +18,16 @@ import {
   settleDecisionModal,
 } from "./decide.js";
 import { renderLobby, setLobbyHooks } from "./lobby.js";
+import {
+  initAudio, toggleSound, isSoundEnabled, playCoin, playCard, playChallenge, playTurn, playClick,
+  playTargetAlert, playActionAlert,
+} from "./sound.js";
+import {
+  openRulesModal, closeRulesModal, isRulesModalOpen, toggleRulesModal,
+} from "./rules_modal.js";
+import {
+  getPace, cyclePace, delayForEvent, PACE_CONFIG,
+} from "./pace.js";
 
 // ---------------------------------------------------------------------------
 // §2 sessions — (gameId, seatId, token) in sessionStorage, per tab (U2). A
@@ -70,6 +80,13 @@ const el = {
   connLabel: document.getElementById("conn-label"),
   connText: document.getElementById("conn-text"),
   bannerStrip: document.getElementById("banner-strip"),
+  rulesBtn: document.getElementById("rules-btn"),
+  soundToggle: document.getElementById("sound-toggle"),
+  soundIcon: document.getElementById("sound-icon"),
+  soundText: document.getElementById("sound-text"),
+  paceToggle: document.getElementById("pace-toggle"),
+  paceIcon: document.getElementById("pace-icon"),
+  paceText: document.getElementById("pace-text"),
 };
 
 // ---------------------------------------------------------------------------
@@ -83,6 +100,7 @@ function route() {
 }
 
 function leaveCurrentView() {
+  clearLiveEventQueue();
   if (pollHandle) { pollHandle.stop(); pollHandle = null; }
   closeAllModals();
   document.getElementById("overlay-root").innerHTML = "";
@@ -144,6 +162,8 @@ async function enterGame(gameId) {
   el.gameView.hidden = false;
   el.lobbyRoot.style.display = "none";
   resetBannerDismissals();
+  updateSoundUI();
+  updatePaceUI();
   wireTopbar();
 
   // Step 3 — a finished game renders final + overlay and never polls (§7.1).
@@ -195,6 +215,7 @@ async function enterGame(gameId) {
  * to the snapshot's last_event_seq so nothing is double-applied.
  */
 async function recoveryResnapshot() {
+  clearLiveEventQueue();
   const snap = await apiGet(state, `/games/${state.gameId}`);
   seedFromSnapshot(snap) // state comes from _current;
   try {
@@ -207,44 +228,169 @@ async function recoveryResnapshot() {
 }
 
 // ---------------------------------------------------------------------------
-// Event batches (§7.2 apply-then-repoll / §7.3 reducer / §12 rows).
-//   forLog=true    — structural deltas skipped (snapshot is seed truth); used
-//                     by bootstrap replay and recovery resnapshots.
-//   appendRows     — bootstrap replay BUILDS the log; recovery resnapshots must
-//                     NOT duplicate visible rows (the log is append-only truth, U7).
+// Sound effects dispatcher for live table events (§14 audio accessibility).
 // ---------------------------------------------------------------------------
 
-function applyEvents(events, opts) {
-  const sorted = [...events].sort((a, b) => a.seq - b.seq); // defensive: seq ascending always
-  let closedInBatch = null;
-  // A pending decision object survives the batch even when a later turn_start in
-  // the SAME batch clears state.decision (the reduce mutates it in place and sets
-  // .settled) — settleDecisionModal needs that reference afterwards (§9.2).
-  const decBefore = state.decision;
-  for (const ev of sorted) {
-    reduce(state, ev, opts);
-    if (opts.appendRows) appendLog(ev, rowForEvent(ev, state));
-    if (ev.seq > state.lastSeq) state.lastSeq = ev.seq;
-    if (ev.type === "window_closed") closedInBatch = ev;
+const lastSoundTimes = {};
+function throttleSound(key, minIntervalMs, fn) {
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (!lastSoundTimes[key] || now - lastSoundTimes[key] >= minIntervalMs) {
+    lastSoundTimes[key] = now;
+    fn();
   }
-  if (opts.forLog) return; // log/memory pass only — no transitions, no re-render
+}
 
-  // A window_closed in this batch transitions an open response modal to its
-  // closed/stale-adjacent state (§7.5 layer 3, §8.1 S3).
+function triggerSoundForEvent(ev, s) {
+  if (!ev) return;
+  const p = ev.payload || ev;
+  const type = p.type || ev.type;
+
+  switch (type) {
+    case "turn_start":
+      if (s && p.seat_id === s.mySeatId) {
+        throttleSound("turn", 350, () => playTurn());
+      }
+      break;
+
+    case "coins_changed":
+      throttleSound("coin", 70, () => playCoin());
+      break;
+
+    case "card_flipped":
+      throttleSound("card", 90, () => playCard());
+      break;
+
+    case "exchange_revealed":
+    case "exchange_completed":
+      throttleSound("card", 90, () => playCard());
+      break;
+
+    case "response_received": {
+      const resp = p.response;
+      const respType = String(typeof resp === "string" ? resp : ((resp && resp.type) || "")).toLowerCase();
+      if (respType.includes("challenge") || respType.includes("counterclaim") || respType.includes("block")) {
+        throttleSound("challenge", 250, () => playChallenge());
+      }
+      break;
+    }
+
+    case "action_declared": {
+      const actType = p.action && p.action.type;
+      const isTargetingMe = p.action && p.action.target_id === s.mySeatId && p.actor_id !== s.mySeatId;
+      if (isTargetingMe) {
+        throttleSound("target_alert", 300, () => playTargetAlert());
+      } else if (actType === "coup") {
+        throttleSound("challenge", 250, () => playChallenge());
+      } else if (p.actor_id !== s.mySeatId) {
+        throttleSound("action_alert", 250, () => playActionAlert());
+      }
+      break;
+    }
+
+    case "card_flip_choice_requested":
+      if (s && p.seat_id === s.mySeatId) {
+        throttleSound("turn", 350, () => playTurn());
+      }
+      break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event batches & Live playback queue (§7.2 apply-then-repoll / §7.3 reducer).
+//   forLog=true    — structural deltas skipped (snapshot is seed truth); used
+//                     by bootstrap replay and recovery resnapshots. Instant.
+//   Live batches   — queued and paced through delayForEvent() so AI actions,
+//                     speech bubbles, and responses display with human cadence.
+// ---------------------------------------------------------------------------
+
+let liveEventQueue = [];
+let queueTimer = null;
+let isProcessingQueue = false;
+
+function clearLiveEventQueue() {
+  if (queueTimer) {
+    clearTimeout(queueTimer);
+    queueTimer = null;
+  }
+  liveEventQueue = [];
+  isProcessingQueue = false;
+}
+
+function enqueueLiveEvents(events) {
+  if (!events || events.length === 0) return;
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  for (const ev of sorted) {
+    if (state && ev.seq <= state.lastSeq) continue;
+    if (liveEventQueue.some((item) => item.seq === ev.seq)) continue;
+    liveEventQueue.push(ev);
+  }
+  processLiveEventQueue();
+}
+
+function processLiveEventQueue() {
+  if (isProcessingQueue) return;
+  if (!state || liveEventQueue.length === 0) return;
+
+  isProcessingQueue = true;
+
+  const step = () => {
+    queueTimer = null;
+    if (!state || liveEventQueue.length === 0) {
+      isProcessingQueue = false;
+      return;
+    }
+
+    if (getPace() === "instant") {
+      while (state && liveEventQueue.length > 0) {
+        const ev = liveEventQueue.shift();
+        applySingleEvent(ev, { appendRows: true });
+      }
+      isProcessingQueue = false;
+      return;
+    }
+
+    const ev = liveEventQueue.shift();
+    applySingleEvent(ev, { appendRows: true });
+
+    if (!state || liveEventQueue.length === 0) {
+      isProcessingQueue = false;
+      return;
+    }
+
+    const delay = delayForEvent(ev, liveEventQueue.length, state);
+    if (delay <= 0) {
+      step();
+    } else {
+      queueTimer = setTimeout(step, delay);
+    }
+  };
+
+  step();
+}
+
+function applySingleEvent(ev, opts = {}) {
+  if (!state) return;
+  const decBefore = state.decision;
+  let closedInBatch = null;
+
+  reduce(state, ev, opts);
+  if (opts.appendRows && appendLog) appendLog(ev, rowForEvent(ev, state));
+  if (ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+  if (ev.type === "window_closed") closedInBatch = ev;
+  if (!opts.forLog) {
+    triggerSoundForEvent(ev, state);
+  }
+
+  // A window_closed transitions an open response modal to its closed/stale-adjacent state
   if (closedInBatch) {
-    guarded("window modal close transition", () => transitionWindowModalOnClose(state, closedInBatch.window_id));
+    const wid = closedInBatch.window_id || (closedInBatch.payload && closedInBatch.payload.window_id);
+    guarded("window modal close transition", () => transitionWindowModalOnClose(state, wid));
   }
 
   fullRender();
   guarded("decision surfaces", () => ensureSurfaces(state));
 
-  // A submitted decision that was settled by this batch but whose state slot was
-  // already cleared by a same-batch turn_start (e.g. coup → flip → next turn in
-  // one burst): settle its modal here or it would sit locked forever (§9.2).
-  // NOTE: no `submitted` gate — the choice may have been accepted from another
-  // client of the same seat (or the batch raced our own POST in flight), and a
-  // settled decision object still has to close its modal (§9.2). The copy picks
-  // between "card is face-up" and "the table chose for you" via d.settled.
+  // A submitted decision that was settled
   if (decBefore && decBefore.settled && state.decision !== decBefore) {
     guarded("decision modal settlement", () => settleDecisionModal(state, decBefore));
   }
@@ -257,6 +403,50 @@ function applyEvents(events, opts) {
 
   // Terminal: the overlay must appear even though polling continues harmlessly.
   if (state.status !== "in_progress") guarded("game-over overlay", () => showGameOver(state));
+}
+
+function applyEventsSync(events, opts = {}) {
+  if (!state) return;
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  let closedInBatch = null;
+  const decBefore = state.decision;
+  for (const ev of sorted) {
+    reduce(state, ev, opts);
+    if (opts.appendRows && appendLog) appendLog(ev, rowForEvent(ev, state));
+    if (ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+    if (ev.type === "window_closed") closedInBatch = ev;
+    if (!opts.forLog) {
+      triggerSoundForEvent(ev, state);
+    }
+  }
+  if (opts.forLog) return;
+
+  if (closedInBatch) {
+    const wid = closedInBatch.window_id || (closedInBatch.payload && closedInBatch.payload.window_id);
+    guarded("window modal close transition", () => transitionWindowModalOnClose(state, wid));
+  }
+
+  fullRender();
+  guarded("decision surfaces", () => ensureSurfaces(state));
+
+  if (decBefore && decBefore.settled && state.decision !== decBefore) {
+    guarded("decision modal settlement", () => settleDecisionModal(state, decBefore));
+  }
+
+  if (state.eliminatedMe && !state.outToastShown) {
+    state.outToastShown = true;
+    infoToast("You are out of the game — spectating.");
+  }
+
+  if (state.status !== "in_progress") guarded("game-over overlay", () => showGameOver(state));
+}
+
+function applyEvents(events, opts = {}) {
+  if (opts && opts.forLog) {
+    applyEventsSync(events, opts);
+  } else {
+    enqueueLiveEvents(events);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +519,122 @@ setDecideHooks({
   refresh: () => { if (state) { fullRender(); guarded("decision surfaces", () => ensureSurfaces(state)); } },
   resnapshot: recoveryResnapshot,
 });
+
+// ---------------------------------------------------------------------------
+// Accessibility, Topbar controls & Audio feedback
+// ---------------------------------------------------------------------------
+
+function updateSoundUI() {
+  const enabled = isSoundEnabled();
+  if (el.soundToggle) {
+    el.soundToggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+    el.soundToggle.title = enabled ? "Sound effects on (Press M to mute)" : "Sound effects muted (Press M to unmute)";
+    el.soundToggle.setAttribute("aria-label", el.soundToggle.title);
+    el.soundToggle.classList.toggle("muted", !enabled);
+  }
+  if (el.soundIcon) {
+    el.soundIcon.textContent = enabled ? "🔊" : "🔇";
+  }
+  if (el.soundText) {
+    el.soundText.textContent = enabled ? "Sound" : "Muted";
+  }
+  const lobbyIcon = document.getElementById("lobby-sound-icon");
+  const lobbyText = document.getElementById("lobby-sound-text");
+  const lobbyBtn = document.getElementById("lobby-sound-btn");
+  if (lobbyIcon) lobbyIcon.textContent = enabled ? "🔊" : "🔇";
+  if (lobbyText) lobbyText.textContent = enabled ? "Sound" : "Muted";
+  if (lobbyBtn) lobbyBtn.classList.toggle("muted", !enabled);
+}
+
+function updatePaceUI() {
+  const pace = getPace();
+  const cfg = PACE_CONFIG[pace] || PACE_CONFIG.normal;
+  if (el.paceToggle) {
+    el.paceToggle.title = `AI Turn Pace: ${cfg.label.replace("Pace: ", "")} (${cfg.desc} · Press P to cycle)`;
+    el.paceToggle.setAttribute("aria-label", el.paceToggle.title);
+  }
+  if (el.paceIcon) el.paceIcon.textContent = cfg.icon;
+  if (el.paceText) el.paceText.textContent = cfg.label;
+
+  const lobbyIcon = document.getElementById("lobby-pace-icon");
+  const lobbyText = document.getElementById("lobby-pace-text");
+  const lobbyBtn = document.getElementById("lobby-pace-btn");
+  if (lobbyBtn) {
+    lobbyBtn.title = `AI Turn Pace: ${cfg.label.replace("Pace: ", "")} (${cfg.desc} · Press P to cycle)`;
+    lobbyBtn.setAttribute("aria-label", lobbyBtn.title);
+  }
+  if (lobbyIcon) lobbyIcon.textContent = cfg.icon;
+  if (lobbyText) lobbyText.textContent = cfg.label;
+}
+
+function setupAccessibilityAndSound() {
+  updateSoundUI();
+  updatePaceUI();
+  window.addEventListener("coup:sound-changed", updateSoundUI);
+  window.addEventListener("coup:pace-changed", () => {
+    updatePaceUI();
+    if (queueTimer) {
+      clearTimeout(queueTimer);
+      queueTimer = null;
+      processLiveEventQueue();
+    }
+  });
+
+  if (el.rulesBtn) {
+    el.rulesBtn.addEventListener("click", () => {
+      initAudio();
+      playClick();
+      toggleRulesModal();
+    });
+  }
+
+  if (el.soundToggle) {
+    el.soundToggle.addEventListener("click", () => {
+      toggleSound();
+      updateSoundUI();
+    });
+  }
+
+  if (el.paceToggle) {
+    el.paceToggle.addEventListener("click", () => {
+      initAudio();
+      playClick();
+      cyclePace();
+    });
+  }
+
+  // Keyboard shortcuts: '?' or 'H' for rules, 'M' for sound, 'P' for pace
+  window.addEventListener("keydown", (e) => {
+    if (e.target && e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
+
+    if (e.key === "?" || e.key === "h" || e.key === "H") {
+      e.preventDefault();
+      initAudio();
+      playClick();
+      toggleRulesModal();
+    } else if (e.key === "m" || e.key === "M") {
+      e.preventDefault();
+      toggleSound();
+      updateSoundUI();
+    } else if (e.key === "p" || e.key === "P") {
+      e.preventDefault();
+      initAudio();
+      playClick();
+      cyclePace();
+    }
+  });
+
+  // Haptic UI tap feedback on interactive buttons
+  document.addEventListener("click", (e) => {
+    const btn = e.target && e.target.closest && e.target.closest("button, .btn, .dcard, .seg button, .gchip, .preset-btn");
+    if (btn && !btn.disabled) {
+      initAudio();
+      playClick();
+    }
+  }, { passive: true });
+}
+
+setupAccessibilityAndSound();
 
 window.addEventListener("hashchange", route);
 route();
