@@ -90,10 +90,12 @@ export function startPolling(state, hooks) {
   let toastShownForEpisode = false;
 
   const loop = async () => {
+    let highestPolledSeq = state.lastSeq || 0;
     while (!stopped) {
       if (inFlight) await sleep(150); // another loop iteration owns the flight
       inFlight = true;
-      const after = state.lastSeq;
+      highestPolledSeq = Math.max(highestPolledSeq, state.lastSeq || 0);
+      const after = highestPolledSeq;
       try {
         const res = await pollOnce(state, after);
         inFlight = false;
@@ -106,6 +108,9 @@ export function startPolling(state, hooks) {
         }
         const evts = res.events || [];
         if (evts.length > 0) {
+          for (const e of evts) {
+            if (e.seq > highestPolledSeq) highestPolledSeq = e.seq;
+          }
           try {
             hooks.onBatch(evts); // apply-then-repoll (§7.2)
           } catch (e) {
@@ -139,7 +144,14 @@ export function startPolling(state, hooks) {
         // state (and its last_event_seq advances the poll cursor). The log is
         // never cleared — it keeps its own rows either way.
         if (hooks.resnapshot) {
-          try { await hooks.resnapshot(); } catch { /* keep polling from the same after */ }
+          try {
+            const ok = await hooks.resnapshot();
+            if (ok) {
+              failures = 0;
+              highestPolledSeq = state.lastSeq || 0;
+              continue;
+            }
+          } catch { /* keep polling from the same after */ }
         }
       }
     }
